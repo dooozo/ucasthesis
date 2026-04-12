@@ -1,6 +1,8 @@
 #!/bin/bash
 set -e
 
+System_Name=`uname`
+
 #---------------------------------------------------------------------------#
 #-                       LaTeX Automated Compiler                          -#
 #-                          <By Huangrui Mo>                               -#
@@ -78,7 +80,11 @@ $TexCompiler -output-directory=$Tmp $FileName || exit
 #-
 if [[ -n $BibCompiler ]]; then
     #- fix the inclusion path for hierarchical auxiliary files
-    sed -i -e "s|\@input{|\@input{$Tmp/|g" $Tmp/"$FileName".aux
+    if [[ $System_Name == "Darwin" ]]; then
+        sed -i '' -e "s|\@input{|\@input{$Tmp/|g" $Tmp/"$FileName".aux
+    else
+        sed -i -e "s|\@input{|\@input{$Tmp/|g" $Tmp/"$FileName".aux
+    fi
     #- extract and format bibliography database via auxiliary files
     $BibCompiler $Tmp/$FileName
     #- insert reference indicators into textual content
@@ -92,7 +98,6 @@ fi
 #-
 #-> Set PDF viewer
 #-
-System_Name=`uname`
 if [[ $System_Name == "Linux" ]]; then
     PDFviewer="xdg-open"
 elif [[ $System_Name == "Darwin" ]]; then
@@ -107,4 +112,3 @@ $PDFviewer ./$Tmp/"$FileName".pdf || exit
 echo "---------------------------------------------------------------------------"
 echo "$TexCompiler $BibCompiler "$FileName".tex finished..."
 echo "---------------------------------------------------------------------------"
-

@@ -1,0 +1,492 @@
+\chapter{层级几何自适应采样框架（H-GAS）}
+\label{chap:method}
+
+本章系统阐述本文提出的层级几何自适应采样框架（Hierarchical Geometric Adaptive Sampling, H-GAS）。该框架从理论、系统和算法三个层面分别给出贡献：（1）理论上建立了题目难度与单位采样成本信息效率之间的定量关系；（2）系统上设计了与KV Cache复用相适配的指数增长批次策略；（3）算法上提出了温度分层重要性采样机制。
+
+\section{问题定义与符号系统}
+\label{sec:problem_definition}
+
+为了便于后续的形式化分析，本节首先明确问题定义和所使用的数学记号。
+
+设$X$为训练Prompt集合，对任意Prompt $x \in X$，当前策略$\pi_\theta$在输入$x$下的输出分布为$\pi_\theta(\cdot|x)$，采样得到的回答序列为$a \in A$。验证器$V: X \times A \to \{0, 1\}$给出二元奖励$r = V(x, a)$，其中$r = 1$表示正确，$r = 0$表示错误。
+
+定义题目$x$在当前策略下的内生正确率（inherent correctness rate）为：
+\begin{equation}
+p(x; \theta) = \mathbb{E}_{a \sim \pi_\theta(\cdot|x)} [V(x, a)] = \Pr[V(x, a) = 1 \mid a \sim \pi_\theta(\cdot|x)]
+\label{eq:inherent_rate}
+\end{equation}
+
+RL后训练的优化目标是最大化所有Prompt上的期望奖励：
+\begin{equation}
+J(\theta) = \mathbb{E}_{x \sim d_0} [p(x; \theta)]
+\label{eq:rl_objective_formal}
+\end{equation}
+
+其中$d_0$为Prompt的采样分布。
+
+在策略梯度框架下，对每个Prompt $x$，采样$n$个回答$\{a_i\}_{i=1}^n$，利用优势函数$A(x, a_i)$估计梯度方向：
+\begin{equation}
+\nabla_\theta J(\theta) \approx \mathbb{E}_x \left[ \frac{1}{n} \sum_{i=1}^n A(x, a_i) \cdot \nabla_\theta \log \pi_\theta(a_i | x) \right]
+\label{eq:policy_gradient_formal}
+\end{equation}
+
+\textbf{核心问题陈述}：在给定总计算预算约束$B$的条件下，设计最优采样策略$S^*$，使得所有Prompt上的有效梯度信号总量最大化，即：
+\begin{equation}
+S^* = \arg\max_S \sum_x \#\{\text{non-zero gradients on } x \text{ under strategy } S\}
+\quad \text{s.t.} \quad \text{Total computation cost} \leq B
+\label{eq:core_problem}
+\end{equation}
+
+\section{难度感知的信息效率分析}
+\label{sec:information_efficiency}
+
+\subsection{单位采样成本信息效率的定义}
+\label{subsec:efficiency_definition}
+
+为了量化不同难度题目在训练中的信息价值，本节从信息论角度建立一个统一的效率度量框架。
+
+对于一个内生正确率为$p$的Prompt，在一个采样组中产生有效训练信号（即非零梯度）的必要条件是：组内的奖励值出现了差异。对于GRPO框架，这等价于至少存在一个正样本和一个负样本（或者说，奖励的标准差$\sigma_r > 0$）。
+
+分别分析获得这两类样本的期望代价：
+\begin{itemize}
+    \item 获得至少一个正样本的期望采样次数为$\frac{1}{p}$（遵循几何分布）。
+    \item 获得至少一个负样本的期望采样次数为$\frac{1}{1-p}$。
+\end{itemize}
+
+在实际的采样-退出机制下，有效信号的获取相当于需要同时满足这两个条件。从采样序列的角度来看，边际意义上产生一个"新信息量"需要的期望采样成本可以被刻画为：
+\begin{equation}
+\text{Cost}(p) \propto \frac{1}{1-p}
+\label{eq:sampling_cost}
+\end{equation}
+
+这是因为在大多数情况下（特别是训练后期$p$较高的场景），获得正样本的成本低，成为瓶颈的是如何在高正确率题目上找到负样本。换言之，负样本的稀缺性成为了制约因素。
+
+与此同时，单次有效信号的信息量$I(p)$与题目提供的"意外程度"相关。在信息论中，一个伯努利随机变量$R \sim \text{Bernoulli}(p)$的信息量（方差）为：
+\begin{equation}
+I(p) = \text{Var}[R] = p(1-p)
+\label{eq:information_content}
+\end{equation}
+
+这也是该随机变量的最大互信息上界。直观上，当$p = 0.5$时，不确定性最大；而当$p \to 0$或$p \to 1$时，不确定性最小。
+
+综合采样成本和信息量，定义单位采样成本的信息效率为：
+\begin{equation}
+\eta(p) = \frac{I(p)}{\text{Cost}(p)} \propto \frac{p(1-p)}{1/(1-p)} = p(1-p)^2
+\label{eq:efficiency_function}
+\end{equation}
+
+这个效率函数具有明确的经济学意义：它衡量每单位采样成本所能获得的平均信息增益。
+
+\subsection{效率函数的分析与推论}
+\label{subsec:efficiency_analysis}
+
+现在对效率函数$\eta(p) = p(1-p)^2$进行详细分析。
+
+\textbf{最优点的求解}。对$\eta(p)$关于$p$求导：
+\begin{align}
+\frac{d\eta}{dp} &= (1-p)^2 + p \cdot 2(1-p) \cdot (-1) \\
+&= (1-p)^2 - 2p(1-p) \\
+&= (1-p)[(1-p) - 2p] \\
+&= (1-p)(1 - 3p)
+\label{eq:derivative_eta}
+\end{align}
+
+令$\frac{d\eta}{dp} = 0$，解得$p = \frac{1}{3}$或$p = 1$（边界）。
+
+计算二阶导数以确定极值类型：
+\begin{align}
+\frac{d^2\eta}{dp^2} &= \frac{d}{dp}[(1-p)(1-3p)] \\
+&= -(1-3p) + (1-p)(-3) \\
+&= -(1-3p) - 3(1-p) \\
+&= -1 + 3p - 3 + 3p \\
+&= 6p - 4
+\label{eq:second_derivative}
+\end{align}
+
+在$p = \frac{1}{3}$处，$\frac{d^2\eta}{dp^2}\big|_{p=1/3} = 6 \cdot \frac{1}{3} - 4 = 2 - 4 = -2 < 0$，所以$p = \frac{1}{3}$是极大值点。
+
+计算最优点的效率值：
+\begin{equation}
+\eta\left(\frac{1}{3}\right) = \frac{1}{3} \cdot \left(\frac{2}{3}\right)^2 = \frac{1}{3} \cdot \frac{4}{9} = \frac{4}{27} \approx 0.148
+\label{eq:optimal_efficiency}
+\end{equation}
+
+\textbf{不同难度下的效率对比}。这一结果具有重要的实践指导意义。当题目的内生正确率约为$\frac{1}{3}$时，单位采样成本所带来的信息增益最大。计算几个典型场景下的效率值：
+
+\begin{table}[htbp]
+    \centering
+    \caption{不同正确率下的单位采样成本信息效率}\label{tab:efficiency_comparison}
+    \begin{tabular}{|c|c|c|c|}
+    \hline
+    正确率$p$ & 效率$\eta(p)$ & 相对最优值 & 典型场景 \\
+    \hline
+    0.1 & 0.081 & 54.7\% & 困难题 \\
+    0.3 & 0.147 & 99.3\% & 中等难度题 \\
+    0.33 & 0.148 & 100\% & 最优难度 \\
+    0.5 & 0.125 & 84.5\% & 平衡题 \\
+    0.7 & 0.063 & 42.6\% & 较易题 \\
+    0.9 & 0.009 & 6.1\% & 训练后期简单题 \\
+    \hline
+    \end{tabular}
+\end{table}
+
+从表\ref{tab:efficiency_comparison}可以看出：
+
+\begin{itemize}
+    \item 简单题$(p = 0.9)$的单位效率仅为中等难题的约$6.1\%$。
+    \item 这意味着在相同的采样成本下，中等难度题能提供约\textbf{16倍}于简单题的有效信息量。
+    \item 困难题$(p = 0.1)$虽然难度大，但由于需要采样很多次才能找到负样本，其单位效率约为最优的$54.7\%$。
+\end{itemize}
+
+\textbf{实际意义}。这从理论上证明了：\textbf{将采样预算不加区分地平均分配给简单题和难题，是一种极为低效的资源利用策略}。对于固定预算分配（如GRPO中的固定$n = 32$），简单题会大量过采样，而对于充分采样条件下能力上界的改善贡献极小；与此同时，难题仍可能因采样不足而无法充分显露其潜在的正确路径。
+
+\subsection{退出条件选择的理论分析}
+\label{subsec:exit_condition_analysis}
+
+基于上述效率分析，本节对两种自适应采样退出条件进行比较。
+
+\textbf{平衡条件（Balance Condition）}：采样直到组内同时出现至少一个正样本和一个负样本，方可停止。这是许多在线自适应采样方法（如Reinforce-Ada）所采用的标准条件。
+
+\textbf{正信号优先条件（Positive-first Condition）}：采样直到组内出现至少一个正样本即可停止。这个条件更激进，会导致更多样本在未观测到负样本时就停止。
+
+\textbf{理论分析}。从统计角度，平衡条件需要同时满足正样本和负样本的存在。对于训练后期的简单题（$p$接近1），获得正样本几乎是即刻完成的，但获得负样本需要平均$\frac{1}{1-p}$次采样。当$p = 0.95$时，获得一个负样本平均需要采样20次。
+
+这部分额外采样在正样本已经满足的条件下提供的边际信息量有限。根据前面的分析，$\eta(0.95) \approx 0.0047$，远低于最优效率。而如果不继续采样而是转向更有价值的中等难度题，总体信息增益会更高。
+
+相比之下，正信号优先条件在获得正样本后即停止，将省下的采样预算转移给更有信息价值的中等难度题。在相同的总预算$B$下，正信号优先条件能够服务更多的题目，且倾向于将额外资源集中在$\eta(p)$较高的区间，理论上具有更高的总信息增益。
+
+\textbf{实验前瞻}。本文在第四章（实验部分）通过等价预算对比实验验证了上述理论预测。实验结果表明，在训练后期正信号优先条件在几乎所有评估指标上均优于平衡条件，且计算成本更低。具体而言，在相同训练时间下，正信号优先条件的最终效果明显优于平衡条件；而在相同最终效果下，正信号优先条件达到同等精度所需的时间仅为平衡条件的约一半。
+
+\section{硬件感知的指数增长批次采样策略}
+\label{sec:exponential_batch_sampling}
+
+\subsection{KV Cache命中率的理论框架}
+\label{subsec:kv_cache_analysis}
+
+在现代推理引擎（如vLLM、SGLang）中，生成过程包含Prefill与Decode两个阶段：
+\begin{itemize}
+    \item \textbf{Prefill阶段}：处理输入Prompt并构建KV Cache，这一步的计算量与Prompt长度成正比。
+    \item \textbf{Decode阶段}：逐Token生成回答，每一步读写缓存状态，计算量与生成长度成正比。
+\end{itemize}
+
+同一批次内的所有样本共享一次Prefill计算。换言之，为$n$条不同的回答进行采样时，Prefill只需执行一次，而Decode执行$n$次（每条回答一次）。
+
+为量化多轮采样对缓存复用效率的影响，本文采用与工业界一致的Prefix KV Cache命中率定义：
+\begin{equation}
+\rho = 1 - \frac{R}{N}
+\label{eq:kv_cache_hit_rate}
+\end{equation}
+
+其中$R$为该Prompt的Prefill轮次，$N$为总采样数。该指标的含义是：第一轮Prefill是必要的，此后每多一轮Prefill都属于因分批而引入的重复计算；$\frac{R}{N}$越小，缓存命中率越高。
+
+\textbf{固定采样的情况}。对于固定采样数$n$的方法，所有样本在单轮内一次性生成，$R = 1$，因此：
+\begin{equation}
+\rho_{\text{fixed}} = 1 - \frac{1}{n}
+\label{eq:kv_cache_fixed}
+\end{equation}
+
+这是命中率的参考上界：固定采样不存在重复Prefill。当$n = 32$时，$\rho_{\text{fixed}} = 1 - \frac{1}{32} \approx 96.9\%$。
+
+\textbf{固定批次追加采样的情况}。对于每轮采样固定$M$个的策略（无论题目难度如何，每轮始终生成$M$个样本），因此$\frac{R}{N} = \frac{1}{M}$为常数：
+\begin{equation}
+\rho_{\text{ada-fixed}} = 1 - \frac{1}{M}
+\label{eq:kv_cache_adaptive_fixed}
+\end{equation}
+
+该命中率与题目难度无关，等价于固定采样$n = M$时的水平。这意味着简单题（提前退出）的缓存命中率与困难题相同，导致简单题上的Prefill成本被低效摊销。
+
+\textbf{几何倍增采样的情况}。对于本文提出的指数增长批次策略，在第$k$轮停止时累计样本数为$N_k$，轮次为$k$，命中率为：
+\begin{equation}
+\rho_{\text{EBS}}(k) = 1 - \frac{k}{N_k}
+\label{eq:kv_cache_ebs}
+\end{equation}
+
+该值随停止轮次$k$的增加而提升。早期退出的简单题命中率较低（因样本数少），晚期退出的难题命中率较高（因后期批次分摊了Prefill成本）。
+
+\textbf{效率分析}。然而，命中率不能单独作为评价采样策略优劣的指标。正确的评价框架应联合考虑命中率与有效计算量。固定$n = 32$的命中率虽然最高（96.9%），但在简单题上浪费大量Decode计算。而自适应采样通过早停将这部分预算转移至难题。
+
+几何倍增采样在计算效率与训练信号覆盖的Pareto前沿上具有优势：
+\begin{itemize}
+    \item 简单题以极少样本（如2-4个）退出，总Prefill轮次为1-2。
+    \item 困难题以多个轮次采样，后期大批次（如16个）的Prefill分摊效率与一次性生成16个样本等价。
+    \item 同时将命中率控制在合理水平（根据难度动态变化）。
+\end{itemize}
+
+\subsection{指数增长批次策略的设计}
+\label{subsec:ebs_design}
+
+本文提出的指数增长批次（Exponential Batch Sampling, EBS）策略，将累计采样预算设计为按轮次呈几何扩展。具体地，定义第$t$轮结束时的累计样本数为：
+\begin{equation}
+N_t = M_0 \cdot 2^{t-1}
+\label{eq:cumulative_samples}
+\end{equation}
+
+其中$M_0$为初始批次大小。第$t$轮的批次大小为相邻累计值之差：
+\begin{equation}
+M_1 = M_0, \quad M_t = M_0 \cdot 2^{t-2} \quad (t \geq 2)
+\label{eq:batch_sizes}
+\end{equation}
+
+设$M_0 = 2$，则各轮批次大小依次为$2, 2, 4, 8, 16$，最大累计样本数为$2 + 2 + 4 + 8 + 16 = 32$，与固定采样数$n = 32$的预算上限一致。该设计对应初始两轮保持相同规模，此后逐轮倍增。
+
+\textbf{设计的三重优势}：
+
+\begin{enumerate}
+    \item \textbf{简单题极速退出，总计算成本最小化}。对于内生正确率$p$接近1的简单题，第一轮（批次大小$M_1 = 2$）即有较高概率满足正信号优先退出条件。例如，对于$p = 0.9$，两次采样至少一次正确的概率约为$1 - 0.1^2 = 0.99 \approx 99\%$。此时总计算成本仅为1次Prefill $+ 2$次Decode，远低于固定$n = 32$方案的1次Prefill $+ 32$次Decode。
+    
+    \item \textbf{困难题深度采样，后期批次分摊Prefill成本}。随着轮次的增加，批次大小按几何倍增。在第5轮（批次大小16）中，16个样本共享一次Prefill，Prefill分摊效率与一次性生成16个样本等价。由于后期样本数量大，单个样本承担的Prefill成本得到显著降低。
+    
+    \item \textbf{累计预算的分布与难度感知的预算分配天然一致}。简单题在前1-2轮退出，共获得2-4个样本；难题在4-5轮才退出，共获得最多32个样本。这种分配方式与第\ref{subsec:efficiency_analysis}节中$\eta(p)$的分析结论一致：更多的采样资源被自动分配给了信息效率更高的困难题。
+\end{enumerate}
+
+\subsection{退出条件与期望采样数}
+\label{subsec:expected_samples}
+
+设采样停止条件为正信号优先条件，在内生正确率为$p$的Prompt上，第$t$轮结束时仍未满足条件（即前$t$轮所有样本均为错误）的概率为：
+\begin{equation}
+P(\text{continue past round } t) = (1-p)^{N_t} = (1-p)^{M_0 \cdot 2^{t-1}}
+\label{eq:continue_probability}
+\end{equation}
+
+期望总采样数为：
+\begin{equation}
+\mathbb{E}[N] = \sum_{t=1}^{R_{\max}} N_t \cdot P(\text{exit at round } t) + N_{R_{\max}} \cdot P(\text{continue past } R_{\max})
+\label{eq:expected_total_samples}
+\end{equation}
+
+其中$P(\text{exit at round } t) = P(\text{continue past round } t-1) - P(\text{continue past round } t)$。
+
+对于简单题（$p = 0.9$，$M_0 = 2$），$\mathbb{E}[N] \approx 2.2$，即平均仅需约2个样本即可退出。这是因为$1 - (1-0.9)^2 = 1 - 0.01 = 0.99$，退出概率极高。
+
+对于难题（$p = 0.05$，$M_0 = 2$），$\mathbb{E}[N] \approx 19$，平均需要约19个样本。与此同时，仍有约19\%的概率在32次采样后仍未找到正确答案，此时该Prompt的采样预算耗尽，与固定$n = 32$方案在该题上的行为一致。
+
+\textbf{动态分配特性}。这一特性是EBS策略相对于固定$n$方案在计算效率上的核心优势：简单题的采样预算被大幅节约，而难题在相同预算上限下仍能获得与固定$n$方案等价的采样深度。换言之，节约下来的简单题预算可以用于增加难题的采样次数，从而优化整体的信息增益。
+
+\section{动态温度缩放与重要性采样校正}
+\label{sec:temperature_scaling_is}
+
+\subsection{深度采样中的探索需求}
+\label{subsec:exploration_necessity}
+
+在EBS策略的框架下，困难题会进入多轮采样，批次大小也随之增大。在这一过程中，一个自然的问题是：当已经进行了大量采样但仍未找到正确答案时，是否应该调整采样温度以增加探索深度？
+
+直觉上，答案是肯定的。当模型在标准温度$T = 1.0$下多次采样均未产生正确回答，这可能意味着正确的推理路径在当前温度下的概率质量极低——它处于概率空间中较为偏远的区域，需要通过提高温度来"展平"概率分布，使探索能够覆盖到这些低概率但正确的路径。
+
+\textbf{类比说明}。我们可以用如下类比来理解这一点：
+\begin{itemize}
+    \item 低温采样相当于在山丘上沿最陡下坡方向行走（贪心搜索）。
+    \item 高温采样相当于进行随机游走。
+    \item 当标准下坡方向无法找到正确答案时，随机游走有更大的概率探索到隐藏在平坦地形中的正确路径。
+\end{itemize}
+
+从数学角度，提高采样温度等价于对logits进行缩放。设原始logits为$z_l$，则温度为$T$的概率分布为：
+\begin{equation}
+\pi_\theta(a_l | \cdot; T) = \frac{\exp(z_l / T)}{\sum_v \exp(z_v / T)}
+\label{eq:temperature_distribution}
+\end{equation}
+
+当$T > 1$时，概率分布变得更加均匀，低概率token的相对概率得到提升；当$T < 1$时，概率分布变得更加锐利，高概率token被进一步放大。
+
+\subsection{动态温度缩放的设计}
+\label{subsec:dynamic_temperature}
+
+基于上述分析，本文提出动态温度缩放（Dynamic Temperature Scaling）方案：将采样温度设计为随累计采样深度对数增长的函数：
+\begin{equation}
+T_t = T_0 \cdot \left(1 + \alpha \cdot \log_2\left(\frac{N_t}{M_0}\right)\right)
+\label{eq:dynamic_temperature}
+\end{equation}
+
+其中$T_0$为基准温度参数（如$T_0 = 0.7$或$0.8$），$\alpha$为缩放因子（通过超参搜索确定，典型值为0.1至0.3之间）。
+
+\textbf{具体计算示例}。以$M_0 = 2$，$\alpha = 0.2$，$T_0 = 0.7$为例：
+
+\begin{itemize}
+    \item 第1轮$(N_1 = 2)$：$T_1 = 0.7 \times (1 + 0.2 \times \log_2(2/2)) = 0.7 \times (1 + 0) = 0.7$
+    \item 第2轮$(N_2 = 4)$：$T_2 = 0.7 \times (1 + 0.2 \times \log_2(4/2)) = 0.7 \times (1 + 0.2) = 0.84$
+    \item 第3轮$(N_3 = 8)$：$T_3 = 0.7 \times (1 + 0.2 \times \log_2(8/2)) = 0.7 \times (1 + 0.4) = 0.98$
+    \item 第4轮$(N_4 = 16)$：$T_4 = 0.7 \times (1 + 0.2 \times \log_2(16/2)) = 0.7 \times (1 + 0.6) = 1.12$
+    \item 第5轮$(N_5 = 32)$：$T_5 = 0.7 \times (1 + 0.2 \times \log_2(32/2)) = 0.7 \times (1 + 0.8) = 1.26$
+\end{itemize}
+
+\textbf{设计特点}。温度的对数增长（以累计采样深度为基底）使得探索强度的提升与采样深度的增加之间保持了合理的比例关系：
+\begin{itemize}
+    \item 浅层采样（简单题、早期退出）使用接近标准的温度（$\approx 0.7$）。
+    \item 中层采样（中等困难题）使用中等温度（$\approx 0.84 - 0.98$）。
+    \item 深层采样（困难题、多轮迭代）逐步过渡到更高的探索温度（$\approx 1.12 - 1.26$）。
+\end{itemize}
+
+对数增长的选择避免了过激的温度上升，同时又能提供足够的探索强度增强。
+
+\subsection{重要性采样校正的理论推导}
+\label{subsec:importance_sampling_correction}
+
+引入动态温度后，不同轮次的样本来自于不同的采样分布。这引入了一个关键问题：如何在无偏的前提下利用这些来自不同分布的样本？
+
+设第$t$轮的采样分布为$q_t(a|x) = \pi_\theta(a|x; T_t)$，即使用温度$T_t$采样时的输出概率分布。目标策略（即我们希望优化的策略）为$\pi_\theta(a|x; T_e)$，其中$T_e$为评估温度（通常设为$T_e = 1.0$，即模型的原始Softmax输出）。
+
+由于$q_t \neq \pi_\theta(\cdot; T_e)$（当$T_t \neq T_e$时），直接将所有样本混合后按标准策略梯度公式计算梯度会产生偏差。正确的做法是对每个样本引入重要性权重（Importance Sampling Weight）：
+\begin{equation}
+\rho(a; T_t, T_e) = \frac{\pi_\theta(a|x; T_e)}{\pi_\theta(a|x; T_t)}
+\label{eq:importance_weight}
+\end{equation}
+
+这一比率可以用Token级别的对数概率计算得到。对于一个长度为$L$的回答序列$a = (a_1, a_2, \ldots, a_L)$：
+\begin{align}
+\log \pi_\theta(a|x; T) &= \sum_{l=1}^L \log \pi_\theta(a_l | x, a_{<l}; T) \\
+&= \sum_{l=1}^L \left( \frac{1}{T} \cdot \text{logit}_l(a_l) - \log Z_l(T) \right)
+\label{eq:log_probability}
+\end{align}
+
+其中$\text{logit}_l(a_l)$是第$l$步时Token $a_l$对应的原始logit，$Z_l(T) = \sum_v \exp(\text{logit}_l(v)/T)$是规范化常数（温度缩放后的归一化因子）。
+
+因此，重要性权重的对数形式为：
+\begin{align}
+\log \rho(a; T_t, T_e) &= \log \pi_\theta(a|x; T_e) - \log \pi_\theta(a|x; T_t) \\
+&= \sum_l \left[ \left(\frac{1}{T_e} - \frac{1}{T_t}\right) \cdot \text{logit}_l(a_l) - \log Z_l(T_e) + \log Z_l(T_t) \right]
+\label{eq:log_importance_weight}
+\end{align}
+
+\textbf{防止梯度方差过大}。引入重要性权重后，为了防止极端重要性权重引起的梯度方差过大，本文对$\rho_i$施加截断：
+\begin{equation}
+\rho_i^{\text{clipped}} = \min(\rho_i, \rho_{\max})
+\label{eq:importance_weight_clipping}
+\end{equation}
+
+其中$\rho_{\max}$为预设的截断阈值（如$\rho_{\max} = 5.0$）。截断操作引入了一定的偏差，但显著降低了梯度方差，在实践中通常能取得更稳定的训练效果。这是在bias-variance权衡上倾向于减少方差的一个选择。
+
+\subsection{优势函数的无偏估计}
+\label{subsec:advantage_function_unbiased}
+
+在引入多温度采样后，优势函数的基准线（Baseline）估计同样需要进行修正。优势函数的定义为：
+\begin{equation}
+A(x, a_i) = r_i - b(x)
+\label{eq:advantage_definition}
+\end{equation}
+
+其中基准线$b(x)$应为当前策略$\pi_\theta$下的期望奖励：
+\begin{equation}
+V^\pi(x) = \mathbb{E}_{a \sim \pi_\theta(\cdot|x; T_e)} [r(a)]
+\label{eq:value_function}
+\end{equation}
+
+这与采样温度无关，代表了目标策略的真实期望性能。
+
+\textbf{朴素方法的偏差问题}。若直接用所有样本的奖励均值作为基准线：
+\begin{equation}
+b_{\text{naive}}(x) = \frac{1}{N} \sum_i r_i
+\label{eq:naive_baseline}
+\end{equation}
+
+这在多温度采样的情形下是有偏的。原因是：高温采样更容易找到稀有的正确答案，使得高温轮次的样本平均奖励高于低温轮次。混合后的简单均值会高估目标策略$\pi_\theta(\cdot|x; T_e)$下的真实期望奖励，导致优势函数偏低，梯度信号被削弱。
+
+\textbf{重要性加权基准线}。正确的做法是使用重要性加权均值来估计$V^\pi(x)$：
+\begin{equation}
+b_{\text{IS}}(x) = \frac{\sum_i \rho_i \cdot r_i}{\sum_i \rho_i}
+\label{eq:is_baseline}
+\end{equation}
+
+这是对$V^\pi(x)$的自归一化重要性采样（Self-Normalized Importance Sampling, SNIS）估计。在样本量足够时具有良好的一致性。直观上，来自目标分布（低温）的正确样本获得较大的权重，而来自远离目标分布（高温）的样本获得较小的权重，从而得到更准确的期望奖励估计。
+
+将修正后的基准线代入，完整的带校正优势函数为：
+\begin{equation}
+A_{\text{IS}}(x, a_i) = r_i - b_{\text{IS}}(x)
+\label{eq:corrected_advantage}
+\end{equation}
+
+\subsection{完整框架的损失函数}
+\label{subsec:complete_loss_function}
+
+整合所有模块，本文框架的最终损失函数为：
+\begin{equation}
+L(\theta) = - \sum_i \rho_i^{\text{clipped}} \cdot A_{\text{IS}}(x, a_i) \cdot \log \pi_\theta(a_i | x; T_e)
+\label{eq:final_loss}
+\end{equation}
+
+这一公式简洁、自洽，通过单一的重要性权重机制同时实现了三个目标：
+\begin{enumerate}
+    \item \textbf{分布偏差的修正}：分子$\pi_\theta(\cdot|T_e)$确保梯度是针对目标策略的，消除了采样分布的影响。
+    \item \textbf{梯度强度的难度感知加权}：$\rho_i$对来自不同温度的样本进行加权，隐式地放大了那些"最需要被纠正"的样本（低温下高置信的错误样本）。
+    \item \textbf{优势函数基准线的无偏估计}：$b_{\text{IS}}$通过重要性加权确保了期望奖励的准确估计。
+\end{enumerate}
+
+本文将这一框架命名为\textbf{温度分层重要性采样（Temperature-Stratified Importance Sampling, TSIS）}。其核心洞察在于：重要性权重$\rho_i$本身就是样本信息价值的天然指示量。
+
+\textbf{样本价值的隐式表示}：
+\begin{itemize}
+    \item \textbf{低温、高置信度下生成的错误样本}具有较高的$\rho_i$。这代表"模型本应给出正确答案但失败了"的情况，对应着模型最需要被纠正的地方。梯度惩罚最强。
+    \item \textbf{高温、高不确定性下侥幸生成的正确样本}具有较低的$\rho_i$。这代表"在高随机性下碰巧成功"的情况，过度强调这类样本可能导致对偶然正确路径的过拟合。通过较低的权重进行适度折现。
+    \item \textbf{低温下生成的正确样本}获得最高的权重，因为这代表模型"可靠且一致的正确表现"。
+\end{itemize}
+
+因此，TSIS机制通过单个加权方案，优雅地实现了对样本信息价值的细粒度刻画。
+
+\section{框架总结与算法流程}
+\label{sec:framework_summary}
+
+本节将上述三个模块整合为完整的算法流程。
+
+\begin{algorithm}[htbp]
+    \caption{层级几何自适应采样框架（H-GAS）}
+    \label{alg:h_gas}
+    \begin{algorithmic}[1]
+        \Require Prompt集合$X$；当前策略$\pi_\theta$；基准温度$T_0$；温度缩放因子$\alpha$；初始批次大小$M_0$；最大轮次$R_{\max}$；重要性权重截断阈值$\rho_{\max}$
+        \Ensure 更新后的策略参数$\theta$
+        
+        \For{每个训练步骤}
+            \State 从$X$中采样一个mini-batch的Prompts，记为$B$。
+            
+            \For{$B$中每个Prompt $x$}
+                \State 初始化样本集合$S_x = \emptyset$，轮次$t = 1$。
+                \Repeat
+                    \State 计算当前轮次的批次大小$M_t$、累计样本数$N_t$和温度$T_t$。
+                    \State 从$\pi_\theta(\cdot|x; T_t)$中采样$M_t$个回答。
+                    \State 调用验证器获得奖励，将$(a_i, r_i, T_t)$三元组加入$S_x$。
+                    \State 检查退出条件（正信号优先：$S_x$中存在$r_i = 1$的样本，或$N_t \geq N_{\max}$）。
+                    \State $t \gets t + 1$
+                \Until{满足退出条件}
+            \EndFor
+            
+            \State 对所有Prompt和样本计算重要性权重：$\rho_i = \frac{\pi_\theta(a_i|x; T_e)}{\pi_\theta(a_i|x; T_{t_i})}$，截断为$\min(\rho_i, \rho_{\max})$。
+            
+            \State 计算重要性加权基准线：$b_{\text{IS}}(x) = \frac{\sum_i \rho_i \cdot r_i}{\sum_i \rho_i}$。
+            
+            \State 计算带校正的损失函数：$L(\theta) = - \sum_x \sum_{i \in S_x} \rho_i^{\text{clipped}} \cdot (r_i - b_{\text{IS}}(x)) \cdot \log \pi_\theta(a_i | x; T_e)$。
+            
+            \State 反向传播，使用优化器（如AdamW）更新参数$\theta$。
+        \EndFor
+    \end{algorithmic}
+\end{algorithm}
+
+\textbf{各模块的对应关系}。本框架中的三项核心贡献分别对应解决第\ref{sec:limitations_of_existing_methods}节（第一章）提出的三个局限：
+
+\begin{itemize}
+    \item \textbf{Positive-first}对应解决"Balance条件在训练后期的额外开销"问题，通过在获得正样本后即停止采样来避免为少量负样本支付高昂成本。
+    
+    \item \textbf{EBS}对应解决"固定小批次与KV Cache不适配"问题，通过指数增长的批次结构提升后期样本对Prefill成本的摊销效率，更好地适配现代推理引擎。
+    
+    \item \textbf{TSIS}对应解决"温度变化引入分布偏差未校正"问题，通过重要性采样校正确保动态温度带来的探索收益能够稳定转化为最终性能。
+\end{itemize}
+
+整体框架在以下三个维度实现了协同优化：
+\begin{enumerate}
+    \item \textbf{采样效率维度}：通过Positive-first和EBS，在相同采样预算下能服务更多的有效Prompt，避免无效坍塌浪费。
+    \item \textbf{硬件利用维度}：通过指数增长的批次结构，更好地适配现代推理引擎的KV Cache机制，提升实际训练速度。
+    \item \textbf{统计正确性维度}：通过TSIS机制，在利用动态温度探索的同时，确保梯度估计的无偏性和收敛性。
+\end{enumerate}
+
+\textbf{最坏情况分析}。本框架在最坏情况下（所有Prompt均为难题，采样至预算上限）的总采样数与固定$n$方案一致。在典型的训练场景中，由于大量简单题在第1-2轮即退出，平均每个Prompt的实际采样数显著低于预算上限，从而实现实际计算成本的下降。
+
+\section{本章小结}
+\label{sec:method_summary}
+
+本章系统阐述了H-GAS框架的三个层面的贡献：
+
+\begin{itemize}
+    \item \textbf{理论层面}：从信息论视角建立了难度与单位采样成本信息效率的定量关系，指出中等难度题($p \approx 1/3$)在单位成本下提供最高的信息增益，这为采样预算的重新分配提供了理论依据。
+    
+    \item \textbf{系统层面}：提出了指数增长批次策略，在保留自适应退出灵活性的同时，提高了推理引擎中KV Cache的前缀复用率，从而在固定算力预算下缩短单步训练时间。
+    
+    \item \textbf{算法层面}：提出了温度分层重要性采样机制，将动态温度缩放与重要性采样校正统一到同一套策略梯度框架，既利用了动态温度对低概率路径的探索，又确保了梯度估计的统计正确性。
+\end{itemize}
+
+这三项贡献形成了一个有机的整体，既从理论上揭示了最优采样的原则，又从系统和算法层面给出了实用的解决方案。
