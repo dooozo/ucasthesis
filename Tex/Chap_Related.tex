@@ -1,0 +1,59 @@
+\chapter{相关工作}\label{chap:related}
+
+\section{大语言模型与后训练范式}
+
+大语言模型的发展通常经历预训练、监督微调与后训练三个阶段。预训练阶段依托 Transformer 架构与海量语料学习通用表征能力，典型代表包括 GPT-3、LLaMA 与 Qwen 系列模型\citep{vaswani2017attention,brown2020languagemodels,touvron2023llama,bai2023qwen,zhao2023surveylargelanguagemodels}。随着模型规模与数据规模增长，后训练成为决定模型是否能够稳定遵循指令、保持安全约束并在复杂任务上获得高质量推理行为的关键环节\citep{ouyang2022training,dai2023safe,lee2023rlaif,chaudhari2024rlhf,rafailov2023direct}。
+
+在人类反馈强化学习之外，近年来也出现了直接偏好优化、AI 反馈强化学习、安全后训练以及对奖励模型质量进行专门评测的工作\citep{rafailov2023direct,dai2023safe,lee2023rlaif,lambert2024rewardbench}。这些工作共同说明：后训练并不是一个单一优化器问题，而是目标函数、奖励来源、采样机制和推理系统共同作用的结果。
+
+\section{数学推理与可验证奖励训练}
+
+数学推理任务之所以成为研究强化学习后训练的重要试验场，在于其奖励信号相对清晰，模型输出通常可以通过最终答案校验、步骤级校验或外部验证器获得近似二值的反馈\citep{cobbe2021training,lightman2023verify,lewkowycz2022solving,ying2024internlmmath}。GSM8K、MATH、Minerva Math、OlympiadBench、Omni-MATH 以及 PutnamBench 等基准构成了从基础文字题到高难竞赛题的多层次评测体系\citep{cobbe2021training,hendrycks2021math,lewkowycz2022solving,he2024olympiadbench,gao2024omnimath,tsoukalas2024putnambench}。
+
+此外，链式思维、自一致性采样和步骤级验证等方法进一步推动了数学推理研究的发展\citep{wei2022chain,wang2022selfconsistency,lightman2023verify}。这些工作强调，多样化采样对于发掘模型潜在能力具有重要意义；但与此同时，采样预算本身也会显著影响最终训练信号质量。
+
+\section{组相对强化学习与信号缺失问题}
+
+在可验证奖励场景中，组相对归一化策略优化因其实现简单、训练稳定而受到广泛关注。作为这一路线的更一般优化背景，PPO 等策略梯度方法已经系统讨论了如何在受限更新幅度下稳定提升策略\citep{schulman2017proximal}；DeepSeek-R1 及其后续工作则表明，按 prompt 采样多个回答并利用组内统计量构造优势函数，能够在推理任务上显著提升模型表现\citep{deepseekai2025deepseekr1,zhang2025realsafer1}。然而，这类方法隐含依赖于一个前提：同一 prompt 下采样得到的回答必须具有足够的奖励差异，否则组内标准差退化后将难以形成有效梯度。
+
+围绕这一问题，近期研究从不同角度给出了解释。一类工作指出，强化学习更擅长激发模型已经具备但尚未稳定外显的能力，而非凭空创造新的能力上限\citep{kim2025reinforcement}。另一类工作则通过 pass@$k$ 评估、重采样分析与长链路推理研究说明，多次采样可以显著暴露单次采样难以观察到的潜在正确解\citep{chen2021codex,wang2022selfconsistency,lewkowycz2022solving}。这些结论共同暗示：当固定小组采样无法覆盖 prompt 内部的正负样本差异时，所谓的“无信号”很可能只是小样本统计假象。
+
+\section{数据过滤、预算分配与自适应采样}
+
+针对组内信号缺失问题，已有研究大致可以分为三类。第一类方法采用被动过滤，即先按照固定预算生成回答，再丢弃全对或全错的 prompt。这类思路实现门槛较低，但已经支付的推理成本无法回收，且难题上稀缺的训练信号会被一并丢弃。第二类方法通过直接放大采样规模来缓解信号退化，其优点是简单有效，但成本通常随组大小线性上升，难以在大规模训练中长期维持\citep{deepseekai2025deepseekr1}。
+
+第三类方法尝试通过自适应预算分配改善采样效率。Reinforce-Ada 提出了在线多轮采样与早停机制，强调在非线性强化学习目标下按需收集样本的重要性\citep{xiong2025reinforceada}。从更广义的强化学习视角看，主动重要性采样、条件重要性采样和双稳健策略梯度等方法都在讨论如何将有限预算优先投向更有价值的样本区域\citep{papini2024policy,humayoo2018relative,rowland2019conditional,huang2019importance}。本文继承这一基本思路，但关注点更进一步：在 reasoning 训练中，不同难度 prompt 的“单位预算信息回报”高度不均匀，退出规则与批次组织方式都应显式考虑这种难度异质性。
+
+\section{推理系统优化与 KV Cache 视角}
+
+除了统计层面的预算分配，现代大语言模型训练与推理系统也越来越强调前缀复用、调度效率和 KV Cache 管理\citep{xu2026kvcacheoptimizationstrategies,jaillet2025online,dong2025accelerating}。对于同一 prompt 的多回答采样，若能够以更规整的批次结构组织生成过程，就有机会减少前缀重复编码，提升吞吐并降低延迟。因此，采样策略的优劣并不只体现在统计信号密度上，也体现在是否与底层推理系统的并行结构相协调。
+
+基于这一观察，本文并不将自适应采样仅仅视为一个数学上的停止规则问题，而是将其视为“统计效率—系统效率”联合优化问题：前者关注能否更早暴露正负样本差异，后者关注能否以更少的系统开销完成同样的重采样任务。
+
+为更清晰地定位本文与已有工作的关系，表~\ref{tab:related_compare} 从奖励来源、采样组织、研究重点以及是否显式讨论系统执行四个维度，对代表性工作进行了横向比较。可以看到，已有工作要么强调 reward 设计与训练稳定性，要么强调多样本推理与测试时扩展，而较少将 prompt 难度异质性、退出规则与批次组织方式放在同一框架下讨论。本文的差异正体现在这里：我们不把采样仅视作固定前置步骤，而把它视作训练信号形成机制的一部分。
+
+若将这一比较放回引言中的总览框架，可以把表~\ref{tab:related_compare} 理解为“问题定位层”的展开：它回答的不是本文方法具体如何运行，而是“为什么现有文献还不足以直接回答本文提出的研究问题”。因此，本章的任务是把研究空白定义清楚，而下一章的方法流程图则进一步回答“在这一空白上，本文打算如何构造解决方案”。
+
+\begin{table}[!htbp]
+    \bicaption{本文与代表性相关工作的比较}{Comparison between this thesis and representative related work.}
+    \label{tab:related_compare}
+    \centering
+    \footnotesize
+    \setlength{\tabcolsep}{4pt}
+    \begin{tabular}{>{\raggedright\arraybackslash}p{2.3cm}>{\raggedright\arraybackslash}p{2.0cm}>{\raggedright\arraybackslash}p{2.1cm}>{\raggedright\arraybackslash}p{3.0cm}>{\raggedright\arraybackslash}p{1.3cm}}
+        \hline
+        工作 & 奖励来源 & 采样组织 & 主要关注点 & 是否涉及系统执行 \\
+        \hline
+        PPO / RLHF\citep{schulman2017proximal,ouyang2022training} & 人类偏好或奖励模型 & 固定批次 & 稳定优化与偏好对齐 & 否 \\
+        DeepSeekMath / GRPO\citep{deepseekai2025deepseekr1} & 可验证结果奖励 & 固定组采样 & 组相对优势与推理强化学习 & 否 \\
+        Self-Consistency\citep{wang2022selfconsistency} & 无显式训练奖励 & 测试时多样本采样 & 多样本聚合提升推理准确率 & 否 \\
+        Reinforce-Ada\citep{xiong2025reinforceada} & 可验证奖励与组内信号 & 在线增量采样 & 非线性 RL 目标下的自适应预算分配 & 部分 \\
+        KV Cache 系统优化\citep{jaillet2025online,dong2025accelerating,xu2026kvcacheoptimizationstrategies} & 不直接依赖奖励 & 服务期调度 & 前缀复用、吞吐与缓存管理 & 是 \\
+        本文 & 可验证二值奖励 & 难度感知几何块自适应采样 & signal collapse、预算效率与系统友好组织 & 是 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\section{本章小结}
+
+本章从五条主线回顾了与本文最相关的研究：大语言模型后训练、数学推理与可验证奖励、组相对强化学习、预算分配与自适应采样，以及面向推理系统的 KV Cache 优化。综述结果表明，现有工作已经分别从 reward、优化器、多样本推理和系统执行等角度讨论了 reasoning 训练问题，但对“固定小组采样如何在异质难度分布上持续诱发 signal collapse，以及采样策略如何同时影响统计效率与系统效率”的分析仍然不足。下一章将在这一研究缺口上给出本文的形式化方法与设计框架。

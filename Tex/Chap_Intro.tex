@@ -2,42 +2,86 @@
 
 \section{研究背景}
 
-考虑到许多同学可能缺乏\LaTeX{}使用经验，ucasthesis将\LaTeX{}的复杂性高度封装，开放出简单的接口，以便轻易使用。同时，对用\LaTeX{}撰写论文的一些主要难题，如制图、制表、文献索引等，进行了详细说明，并提供了相应的代码样本，理解了上述问题后，对于初学者而言，使用此模板撰写学位论文将不存在实质性的困难。所以，如果你是初学者，请不要直接放弃，因为同样为初学者的我，十分明白让\LaTeX{}简单易用的重要性，而这正是ucasthesis所追求和体现的。
+大语言模型在自然语言理解、程序生成和多步推理等任务上持续取得突破，其核心技术路线已经从“预训练规模扩张”逐渐转向“预训练能力如何在后训练阶段被稳定激发”\citep{vaswani2017attention,brown2020languagemodels,touvron2023llama,bai2023qwen,zhao2023surveylargelanguagemodels}。尤其是在数学推理、代码推理和科学问答等可验证任务中，模型是否能够稳定输出高质量长链路解答，越来越依赖后训练阶段的强化学习过程\citep{ouyang2022training,dai2023safe,lee2023rlaif,chaudhari2024rlhf,deepseekai2025deepseekr1}。
 
-此中国科学院大学学位论文模板ucasthesis基于中科院数学与系统科学研究院吴凌云研究员的CASthesis模板发展而来。当前ucasthesis模板满足最新的中国科学院大学学位论文撰写要求和封面设定。兼顾操作系统：Windows，Linux，MacOS 和\LaTeX{}编译引擎：pdflatex，xelatex，lualatex。支持中文书签、中文渲染、中文粗体显示、拷贝PDF中的文本到其他文本编辑器等特性。此外，对模板的文档结构进行了精心设计，撰写了编译脚本提高模板的易用性和使用效率。
+与传统监督微调不同，强化学习后训练不再直接模仿参考答案，而是通过奖励信号调整策略模型在候选解空间中的搜索分布。当任务具备明确答案校验器时，强化学习能够把“是否答对”这一离散反馈直接传递给策略优化过程，从而为数学推理训练提供较清晰的学习信号\citep{cobbe2021training,hendrycks2021math,lightman2023verify,lewkowycz2022solving,ying2024internlmmath}。这也是近年来 reasoning 模型大量采用 verifiable reward 的主要原因。
 
-ucasthesis的目标在于简化学位论文的撰写，利用\LaTeX{}格式与内容分离的特征，模板将格式设计好后，作者可只需关注论文内容。 同时，ucasthesis有着整洁一致的代码结构和扼要的注解，对文档的仔细阅读可为初学者提供一个学习\LaTeX{}的窗口。此外，模板的架构十分注重通用性，事实上，ucasthesis不仅是国科大学位论文模板，同时，通过少量修改即可成为使用\LaTeX{}撰写中英文文章或书籍的通用模板，并为使用者的个性化设定提供了接口。
+\section{强化学习后训练中的组采样问题}
 
-\section{系统要求}\label{sec:system}
+尽管奖励定义相对清晰，但 reasoning 训练依然面临显著的高方差问题。一个常见做法是对同一 prompt 采样多个回答，再利用组内平均值与标准差构造相对优势函数，以此降低尺度差异并稳定训练\citep{deepseekai2025deepseekr1,zhang2025realsafer1,xiong2025reinforceada}。然而，这类方法也引入了一个基础但严重的问题：如果同一组采样结果恰好全对或全错，组内奖励方差就会趋于零，造成有效梯度消失。
 
-\href{https://github.com/mohuangrui/ucasthesis}{\texttt{ucasthesis}} 宏包可以在目前主流的 \href{https://en.wikibooks.org/wiki/LaTeX/Introduction}{\LaTeX{}} 编译系统中使用，如\TeX{}Live和MiK\TeX{}。因C\TeX{}套装已停止维护，\textbf{不再建议使用} （请勿混淆C\TeX{}套装与ctex宏包。C\TeX{}套装是集成了许多\LaTeX{}组件的\LaTeX{}编译系统。 \href{https://ctan.org/pkg/ctex?lang=en}{ctex} 宏包如同ucasthesis，是\LaTeX{}命令集，其维护状态活跃，并被主流的\LaTeX{}编译系统默认集成，是几乎所有\LaTeX{}中文文档的核心架构）。推荐的 \href{https://en.wikibooks.org/wiki/LaTeX/Installation}{\LaTeX{}编译系统} 和 \href{https://en.wikibooks.org/wiki/LaTeX/Installation}{\LaTeX{}文本编辑器} 为
-\begin{center}
-    %\footnotesize% fontsize
-    %\setlength{\tabcolsep}{4pt}% column separation
-    %\renewcommand{\arraystretch}{1.5}% row space 
-    \begin{tabular}{lcc}
-        \hline
-        %\multicolumn{num_of_cols_to_merge}{alignment}{contents} \\
-        %\cline{i-j}% partial hline from column i to column j
-        操作系统 & \LaTeX{}编译系统 & \LaTeX{}文本编辑器\\
-        \hline
-        Linux & \href{https://www.tug.org/texlive/acquire-netinstall.html}{\TeX{}Live Full} & \href{http://www.xm1math.net/texmaker/}{Texmaker} 或 Vim\\
-        MacOS & \href{https://www.tug.org/mactex/}{Mac\TeX{} Full} & \href{http://www.xm1math.net/texmaker/}{Texmaker} 或 Texshop\\
-        Windows & \href{https://www.tug.org/texlive/acquire-netinstall.html}{\TeX{}Live Full} 或 \href{https://miktex.org/download}{MiK\TeX{}} & \href{http://www.xm1math.net/texmaker/}{Texmaker}\\
-        \hline
-    \end{tabular}
-\end{center}
+形式化地，若同一 prompt 的单次答对概率为 $p_x$，组大小为 $n$，则该 prompt 在一次组采样中发生全对或全错的概率为 $p_x^n+(1-p_x)^n$。当 $n$ 较小而训练数据的难度分布又高度异质时，这一概率会在训练全过程中反复出现。对于困难题，它表现为大量“全错组”；对于简单题，它又会在训练中后期演化为“全对组”。因此，零信号并不是训练早期的暂时噪声，而是固定小组采样与真实难度分布不匹配的结构性后果。
 
-\LaTeX{}编译系统，如\TeX{}Live（Mac\TeX{}为针对MacOS的\TeX{}Live)，用于提供编译环境，\LaTeX{}文本编辑器 (如Texmaker) 用于编辑\TeX{}源文件。请从各软件官网下载安装程序，勿使用不明程序源。\textbf{\LaTeX{}编译系统和\LaTeX{}编辑器分别安装成功后，即完成了\LaTeX{}的系统配置}，无需其他手动干预和配置。若系统原带有旧版的\LaTeX{}编译系统并想安装新版，请\textbf{先卸载干净旧版再安装新版}。
+\section{Signal Collapse 的经验动机}
 
-\section{问题反馈}
+为了更具体地展示这一问题，本文首先统计了 \texttt{Qwen2.5-Math-1.5B base} 在 \texttt{OpenR1-Math-220k} 抽样切片上的 prompt 级正确率分布。结果显示，样本平均正确率为 0.2623，中位数仅为 0.1055，但上四分位已达到 0.4609，呈现明显的低端堆积与高端长尾并存结构。这意味着训练集中同时存在大量“几乎答不对”的样本和一批“经常能答对”的样本，难度差异极大。
 
-请见 \href{https://github.com/mohuangrui/ucasthesis/wiki/%E5%B8%B8%E8%A7%81%E9%97%AE%E9%A2%98}{问题反馈} 
+更进一步地，本文使用每题 $256$ 次重复采样得到的经验正确率，估计固定组大小下的总体 signal collapse 概率。结果表明：在训练起点，组大小为 $4,8,16,32$ 时的总体坍塌率分别达到 65.35\%、52.91\%、43.08\% 和 35.36\%；到了训练第 600 步，这一数值虽下降至 55.95\%、41.98\%、32.75\% 和 26.41\%，但仍处于不可忽视的高位。换言之，即使显著增加组大小，固定采样也难以彻底解决训练信号缺失问题。
 
-欢迎大家有效地反馈模板不足之处，一起不断改进模板。希望大家向同事积极推广\LaTeX{}，一起更高效地做科研。
+这一定量结果与 pass@$k$ 类研究形成呼应。多次采样往往能显著提升模型找到正确答案的概率，说明单次或小组采样所呈现出来的“无信号”并不等同于“模型没有潜在能力”\citep{chen2021codex,wang2022selfconsistency,kim2025reinforcement}。因此，本文将关注点从“如何修改损失函数”转向“如何更合理地为 prompt 分配采样预算”。
 
-\section{模板下载}
+\section{研究目标与本文贡献}
 
-\begin{center}
-    \href{https://github.com/mohuangrui/ucasthesis}{Github/ucasthesis}: \url{https://github.com/mohuangrui/ucasthesis}
-\end{center}
+基于上述观察，本文试图回答以下问题：第一，固定小组采样为何会在 reasoning 训练中系统性地产生 signal collapse；第二，prompt 级难度异质性如何影响采样预算的边际收益；第三，是否存在一种更适合系统实现的自适应预算组织方式，在不明显牺牲统计效果的前提下降低无效开销。
+
+围绕这些问题，本文的主要工作可概括为以下三点：
+\begin{enumerate}
+    \item 基于 \texttt{OpenR1-Math-220k} 抽样数据与训练 checkpoint 切片，系统量化了 reasoning 强化学习训练中的 prompt 难度分布与 signal collapse 现象，证明零信号并非偶发异常，而是固定小组采样下的常态风险。
+    \item 从预算效率角度分析了不同退出规则的差异，指出正样本优先规则在当前数据下较平衡规则更具成本效益，支持“把简单题节省下的预算转移给更难题目”的难度感知思想。
+    \item 比较固定块与几何块两种自适应采样组织方式，说明几何块方法在统计效果接近的前提下具有更规整的批次结构，为后续 KV Cache 复用与系统并行优化提供了更自然的接口。
+\end{enumerate}
+
+图~\ref{fig:thesis_overview} 给出了本文的整体论证框架。整篇论文围绕一个核心判断展开：reasoning 强化学习中的训练停滞并不只是优化器问题，更是 signal collapse 在异质难度分布上的系统性表现。为验证这一判断，本文首先用 prompt 级统计量刻画问题，再提出难度感知自适应采样框架，最后通过分布、坍塌率、预算效率和训练动态四类证据形成闭环论证。
+
+从章节组织上看，图中的上半部分对应本文前两章的任务：第~\ref{chap:related} 章负责说明这一问题在既有文献中的位置与研究缺口；第~\ref{chap:method} 章则把“预算如何分配、何时停止、如何组织采样”转化为可执行的方法框架。换言之，总览图首先给出的是全文论证蓝图，而后续相关工作矩阵与方法流程图分别承担“文献定位”和“方法落地”两种不同功能。
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{tikzpicture}[>=latex, every node/.style={font=\small}]
+        \tikzstyle{box}=[draw, rounded corners, align=center, minimum height=1.0cm, text width=3.2cm]
+        \tikzstyle{widebox}=[draw, rounded corners, align=center, minimum height=1.1cm, text width=4.1cm]
+        \tikzstyle{line}=[draw, ->, thick]
+
+        \node[widebox] (problem) at (0,0) {研究问题\\固定组采样为何在异质难度分布下持续诱发 signal collapse？};
+        \node[box] (rq1) at (-5.0,-2.5) {RQ1\\prompt 难度分布是否显著异质？};
+        \node[box] (rq2) at (0,-2.5) {RQ2\\坍塌现象是否在训练前后持续存在？};
+        \node[box] (rq3) at (5.0,-2.5) {RQ3\\自适应预算是否比固定预算更高效？};
+
+        \node[widebox] (method) at (0,-5.1) {方法框架\\难度感知几何块自适应采样\\退出规则：平衡 / 正样本优先};
+
+        \node[box] (exp1) at (-5.0,-7.9) {证据一\\正确率分布与难度分层};
+        \node[box] (exp2) at (0,-7.9) {证据二\\signal collapse 与全错/全对迁移};
+        \node[box] (exp3) at (5.0,-7.9) {证据三\\预算效率、训练动态与系统友好性};
+
+        \node[widebox] (conclusion) at (0,-10.8) {核心结论\\采样预算是训练信号设计的一部分\\统计效率与系统效率需要联合优化};
+
+        \path[line] (problem) -- (rq1);
+        \path[line] (problem) -- (rq2);
+        \path[line] (problem) -- (rq3);
+        \path[line] (rq1) -- (method);
+        \path[line] (rq2) -- (method);
+        \path[line] (rq3) -- (method);
+        \path[line] (method) -- (exp1);
+        \path[line] (method) -- (exp2);
+        \path[line] (method) -- (exp3);
+        \path[line] (exp1) -- (conclusion);
+        \path[line] (exp2) -- (conclusion);
+        \path[line] (exp3) -- (conclusion);
+    \end{tikzpicture}
+    \bicaption{本文整体论证框架总览}{Overall argument structure of this thesis.}
+    \label{fig:thesis_overview}
+\end{figure}
+
+\section{研究意义}
+
+本文的意义主要体现在三个层面。
+
+第一，在理论层面，本文将 reasoning 强化学习训练中的“零梯度”现象明确表述为 prompt 级 signal collapse，并给出与组大小、题目难度分布直接相关的概率表达式。这样的表述把一个过去常被视为“训练不稳定”或“优化器噪声”的经验问题，转化为可以被分析、度量与比较的统计对象。对后续研究而言，这意味着不同采样策略、退出规则与温度机制都可以在统一的 prompt 级风险框架下进行讨论。
+
+第二，在方法层面，本文强调采样预算本身也是训练信号设计的一部分。以往很多工作将采样过程视为固定前置步骤，把主要精力放在奖励模型、优势函数或优化目标的改进上；而本文表明，在数据难度异质性显著存在时，预算如何按 prompt 分配、何时提前停止以及如何组织增量采样，都会直接决定训练中可被观测到的有效对比信号总量。因此，采样并不是训练外部的“数据准备”，而是训练内部的“信号构造”。
+
+第三，在系统层面，本文指出统计效率与系统效率并非相互割裂。几何块采样不仅影响缺失率与平均成本，也决定了同前缀多回答生成能否以更规整的方式调度，从而影响 KV Cache 复用和批次吞吐。对于大规模 reasoning 训练而言，这一点尤其重要：当单轮训练需要处理海量 prompt 与长链路回答时，采样策略是否利于系统执行，往往会转化为真实 wall-clock 成本差异。
+
+换言之，本文的目标并不只是提出一个局部采样技巧，而是尝试给出一个统一视角：在可验证奖励的 reasoning 场景中，训练信号质量来源于“概率分布、预算分配与系统调度”三者的共同作用。只有将三者作为一个整体来理解，后训练过程中的许多经验现象才能被更系统地解释。
+
+本文后续结构安排如下：第~\ref{chap:related} 章综述相关工作；第~\ref{chap:method} 章给出难度感知自适应采样方法；第~\ref{chap:experiment} 章介绍实验设计与结果；第~\ref{chap:discussion} 章进行讨论；第~\ref{chap:conclusion} 章总结全文并展望后续研究。

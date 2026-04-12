@@ -1,0 +1,151 @@
+\chapter{难度感知的自适应采样方法}\label{chap:method}
+
+\section{问题定义}
+
+设 prompt 分布为 $x\sim d_0$，策略模型为 $\pi_{\theta}(y\mid x)$，回答 $y$ 经验证器判定后得到奖励 $r(x,y)\in\{0,1\}$。强化学习后训练的目标可以写为
+\begin{equation}
+    J(\theta)=\mathbb{E}_{x\sim d_0,\,y\sim\pi_{\theta}(\cdot\mid x)}[r(x,y)].
+\end{equation}
+
+对给定 prompt $x$，记单次采样答对的真实概率为 $p_x$。若采用固定组大小 $n$ 的组相对更新，组内全对或全错都会导致奖励方差趋于零。相应地，prompt 级“信号坍塌”概率可以表示为
+\begin{equation}
+    P_{\mathrm{collapse}}(x;n)=p_x^n+(1-p_x)^n.
+\end{equation}
+
+对全体训练分布求期望后，可得固定组大小下的总体坍塌率
+\begin{equation}
+    P_{\mathrm{collapse}}(n)=\mathbb{E}_{x\sim d_0}[p_x^n+(1-p_x)^n].
+\end{equation}
+
+该式揭示了一个关键事实：即使所有 prompt 都满足 $0<p_x<1$，只要 $n$ 足够小，整体训练中仍会频繁出现统计意义上的“零信号”事件。因此，本文关心的问题不是简单地判断某题是否可学，而是讨论在预算受限条件下，如何为不同难度 prompt 分配更合适的采样次数。
+
+\section{难度异质性与预算效率分析}
+
+若目标是尽快观察到正负样本差异，则 prompt 的学习价值不仅取决于正确率本身，也取决于少数类样本的获取成本。对二值奖励而言，单样本方差信息可由 $p_x(1-p_x)$ 表征。若进一步考虑在训练后期仍需保留错误样本，则其单位成本信息效率可近似写为
+\begin{equation}
+    \eta(p_x)\propto p_x(1-p_x)^2.
+\end{equation}
+
+当 $p_x=0.9$ 时，$\eta(p_x)=0.009$；当 $p_x=0.3$ 时，$\eta(p_x)=0.147$。这意味着在相同预算下，中等偏难样本能够产生远高于简单样本的有效对比信息。若训练过程继续对高通过率 prompt 强行追求“平衡”的正负样本数量，就会在后期为少量 hard negative 付出不成比例的重采样开销。
+
+基于这一分析，本文主张将退出规则与批次预算设计成难度敏感的形式：对高成功率 prompt，允许更早停止并将预算腾挪给中等难度样本；对低成功率或中等成功率 prompt，则保留额外采样空间，以便更稳定地暴露正负差异。
+
+\section{几何块自适应采样框架}
+
+为兼顾统计效率与系统效率，本文采用几何块自适应采样框架。对每个 prompt，不再一次性采样固定 $n$ 条回答，而是按块逐轮追加采样。设块序列为
+\begin{equation}
+    \mathcal{B}=\{2,2,4,8,16\},
+\end{equation}
+其总预算上限为 $32$。第 $t$ 轮结束后，根据当前累计样本集合 $S_x^{(t)}$ 判断是否继续采样。
+
+该设计具有三点动机。第一，小块起步可以在训练早期快速确认极易题和极难题是否值得继续采样。第二，几何扩张使困难 prompt 获得越来越大的后续预算，而简单 prompt 往往在前两轮即可退出。第三，更规整的块结构更适合与前缀复用和 KV Cache 管理结合，从而减少重复编码开销。
+
+图~\ref{fig:adaptive_pipeline} 给出了本文方法的概念流程图。与固定组采样“一次性生成、一次性更新”的流程不同，本文方法在 prompt 级维护一个动态活跃集合：每一轮只对仍未满足退出条件的样本继续追加预算，其余样本则提前退出。最终，活跃集合与样本池状态共同决定哪些 prompt 会进入后续更新构造阶段。
+
+若与引言中的总览图对照，图~\ref{fig:adaptive_pipeline} 对应的正是其中“方法框架”那一层：总览图说明本文要回答哪些研究问题，而这里的流程图则把这些问题具体落实为活跃集合、几何块预算、退出规则和更新构造四个可操作部件。也正因为如此，相关工作矩阵、总览图和方法流程图在本文中并不是重复表达，而是分别承担“研究定位—全局框架—局部实现”三种不同粒度的叙事功能。
+
+\begin{figure}[!htbp]
+    \centering
+    \begin{tikzpicture}[>=latex, every node/.style={font=\small}]
+        \tikzstyle{box}=[draw, rounded corners, align=center, minimum height=0.95cm, text width=3.0cm]
+        \tikzstyle{widebox}=[draw, rounded corners, align=center, minimum height=0.95cm, text width=3.8cm]
+        \tikzstyle{line}=[draw, ->, thick]
+
+        \node[box] (prompt) at (0,0) {Prompt 批次\\$\mathcal{X}$};
+        \node[widebox] (active) at (4.6,0) {活跃集合初始化\\$\mathcal{A}\leftarrow\mathcal{X}$};
+        \node[widebox] (block) at (9.8,0) {按几何块采样\\$2\rightarrow 2\rightarrow 4\rightarrow 8\rightarrow 16$};
+        \node[widebox] (pool) at (9.8,-2.2) {累计样本池\\$S_x\leftarrow S_x\cup\{y_i\}$};
+        \node[widebox] (rule) at (4.6,-2.2) {退出规则判断\\平衡 / 正样本优先};
+        \node[box] (next) at (0,-2.2) {更新活跃集合\\$\mathcal{A}_{next}$};
+        \node[widebox] (update) at (4.6,-4.4) {形成有效信号后\\进入下采样与更新构造};
+
+        \path[line] (prompt) -- (active);
+        \path[line] (active) -- (block);
+        \path[line] (block) -- (pool);
+        \path[line] (pool) -- (rule);
+        \path[line] (rule) -- (next);
+        \draw[->, thick] (next.north) |- (block.west);
+        \path[line] (rule) -- (update);
+    \end{tikzpicture}
+    \bicaption{难度感知自适应采样的概念流程图}{Conceptual pipeline of difficulty-aware adaptive sampling.}
+    \label{fig:adaptive_pipeline}
+\end{figure}
+
+从实现角度看，这一框架还具有一个重要优点：它不要求训练系统在一开始为每个 prompt 分配固定长度的回答队列，而是允许在轮次边界上以 prompt 为粒度动态调整活跃集合。于是，真正消耗大块预算的只会是那些在前几轮尚未形成可分辨信号的样本，而非全体样本。这种“逐轮淘汰活跃 prompt”的机制，使得自适应采样天然适合与在线训练流水线结合。
+
+\section{两类退出规则}
+
+结合现有实验数据，本文重点分析两类退出规则。
+
+\subsection{平衡退出规则}
+
+平衡退出规则要求当前样本集合中同时出现正确与错误回答，才能认定该 prompt 已经形成有效训练信号。其优势在于显式保留正负样本对照，缺点是在训练后期可能为简单题反复追加采样，只为“寻找一个错误答案”。
+
+\subsection{正样本优先退出规则}
+
+正样本优先退出规则在观测到至少一个正确回答后即可停止采样，仅将“预算耗尽仍全错”的 prompt 视作缺失样本。该规则更加节省预算，尤其适用于模型已经具备一定基础能力时的中后期训练阶段。它的核心思想不是否认负样本的重要性，而是承认在有限预算下，简单题上的额外找错成本未必比把预算转移给难题更划算。
+
+\section{训练时采样流程的算法化描述}
+
+为了将上述框架落到可执行流程，算法~\ref{alg:adaptive_sampling} 给出了训练阶段的 prompt 级自适应采样过程。它强调两个关键状态：其一是活跃 prompt 集合，即当前仍需继续采样的题目；其二是每个 prompt 已累计的样本池，用于判断是否满足退出条件。相比“一次性采完再过滤”的被动流程，该算法在每一轮之后都会收缩活跃集合，因此能够将后续预算逐渐集中到最难分辨的样本上。
+
+\begin{algorithm}[!htbp]
+    \caption{几何块自适应采样流程}
+    \label{alg:adaptive_sampling}
+    \small
+    \begin{algorithmic}[1]
+        \Require Prompt 批次 $\mathcal{X}$，块序列 $\mathcal{B}=\{2,2,4,8,16\}$，退出规则 $\mathcal{R}$
+        \Ensure 每个 prompt 的样本池 $S_x$ 及最终是否缺失有效信号的标记
+        \State 初始化活跃集合 $\mathcal{A}\leftarrow \mathcal{X}$
+        \ForAll{$x\in\mathcal{X}$}
+            \State $S_x\leftarrow \varnothing$
+        \EndFor
+        \For{$b\in\mathcal{B}$}
+            \ForAll{$x\in\mathcal{A}$}
+                \State 从 $\pi_{\theta}(\cdot\mid x)$ 采样 $b$ 个回答并加入 $S_x$
+            \EndFor
+            \State $\mathcal{A}_{\mathrm{next}}\leftarrow \varnothing$
+            \ForAll{$x\in\mathcal{A}$}
+                \If{$\mathcal{R}(S_x)=\mathrm{continue}$}
+                    \State 将 $x$ 加入 $\mathcal{A}_{\mathrm{next}}$
+                \EndIf
+            \EndFor
+            \State $\mathcal{A}\leftarrow \mathcal{A}_{\mathrm{next}}$
+            \If{$\mathcal{A}=\varnothing$}
+                \State \textbf{break}
+            \EndIf
+        \EndFor
+        \ForAll{$x\in\mathcal{X}$}
+            \State 根据 $S_x$ 判断是否形成有效信号，并执行后续下采样与更新构造
+        \EndFor
+    \end{algorithmic}
+\end{algorithm}
+
+\section{复杂度与系统实现讨论}
+
+若设初始 prompt 数量为 $N$，第 $t$ 轮仍然活跃的 prompt 数量为 $N_t$，对应块大小为 $B_t$，则总采样成本可以写为
+\begin{equation}
+    C_{\mathrm{total}}=\sum_t N_t B_t.
+\end{equation}
+
+固定组大小策略的成本则为 $C_{\mathrm{fixed}}=N\cdot n$。两者的差异不在于是否都需要为每个 prompt 生成回答，而在于自适应采样允许 $N_t$ 随轮次快速下降。只要简单题与极难题能在前几轮被识别出来，就有机会在后续大块预算到来前从活跃集合中退出，从而压低总体成本。
+
+从显存与缓存角度看，几何块策略还带来另一层收益。对于保留在活跃集合中的 prompt，其前缀往往已经被多轮复用，因此后续继续生成更长回答或更多回答时，能够更自然地复用已有的 KV Cache 状态。换言之，块结构越规整，越容易在系统层面实现“先筛查、后集中扩展”的执行模式；这正是本文强调几何块策略不仅有统计意义，也有工程意义的原因。
+
+\section{分布一致性扩展讨论}
+
+当采样块大小不断变化时，固定温度采样可能带来隐式的分布偏移问题。理论上，可令温度随块大小按对数规律调整：
+\begin{equation}
+    T_t=T_0\bigl(1+\alpha\log_2 B_t\bigr),
+\end{equation}
+其中 $B_t$ 为第 $t$ 轮块大小，$\alpha$ 为缩放系数。若跨轮次温度不同，则可进一步采用重要性权重
+\begin{equation}
+    \rho(y\mid x)=\frac{\pi_{\theta}(y\mid x;T_{\mathrm{target}})}{\pi_{\theta}(y\mid x;T_{\mathrm{sample}})}
+\end{equation}
+对梯度估计进行校正\citep{papini2024policy,humayoo2018relative,rowland2019conditional,huang2019importance}。
+
+考虑到当前已获得的实验数据主要集中于 prompt 级正确率分布、训练动态与退出规则对比，本文在实验部分重点验证难度感知退出与几何块预算的统计有效性；温度缩放与重要性采样则作为后续完整系统实现的理论扩展方向保留，其直觉也与动态温度采样研究中的“在不同时刻维持合适探索强度”相一致\citep{papini2024policy,humayoo2018relative,rowland2019conditional,huang2019importance,zhang2024edt}。
+
+\section{本章小结}
+
+本章从概率建模、预算效率和系统组织三个角度给出了难度感知自适应采样的形式化描述。核心思想并不复杂：在训练过程中，不同 prompt 对额外采样预算的边际收益并不相同，因此采样次数不应是固定常数，而应由样本难度与退出规则共同决定。围绕这一思想，本文进一步提出了几何块调度、活跃集合迭代与后续更新构造的统一流程，为下一章的实验比较提供了清晰的实现对象与分析基线。

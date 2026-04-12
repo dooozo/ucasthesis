@@ -21,7 +21,9 @@
 %---------------------------------------------------------------------------%
 %->> Document settings
 %---------------------------------------------------------------------------%
-\usepackage[authoryear,list]{Style/artratex}% document settings
+\usepackage[numbers,list,tikz,math,table]{Style/artratex}% document settings
+\setlength{\hfuzz}{10pt}
+\AtBeginDocument{\pdfstringdefDisableCommands{\def\hskip#1{}}}
 %- usage: \usepackage[option1,option2,...,optionN]{artratex}
 %- Multiple optional arguments:
 %- [bibtex|biber]% set bibliography processor and package
@@ -92,4 +94,3 @@
 \input{Tex/Backmatter}% other information
 \end{document}
 %---------------------------------------------------------------------------%
-
