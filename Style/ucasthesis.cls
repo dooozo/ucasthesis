@@ -414,13 +414,14 @@
 \newcommand{\MAKETITLE@xpdc}{%
     \cleardoublepage
     \thispagestyle{empty}
+    \hfuzz=5pt
     \begin{center}
         \linespread{1.6}
         \zihao{4}\bfseries
 
         \vspace*{50pt}
 
-        {\zihao{-3}\bfseries \ulenhance[1.5pt]{\ucas@value@en@title}}
+        {\zihao{-3}\bfseries\parbox{0.76\textwidth}{\centering \ucas@value@en@title}}
 
         \vspace*{\stretch{3}}
 
@@ -738,4 +739,3 @@
 \renewcommand*\l@table{\@dottedtocline{1}{1em}{1.8em}}
 %---------------------------------------------------------------------------%
 \endinput
-

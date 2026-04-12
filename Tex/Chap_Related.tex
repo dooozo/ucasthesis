@@ -2,13 +2,13 @@
 
 \section{大语言模型与后训练范式}
 
-大语言模型的发展通常经历预训练、监督微调与后训练三个阶段。预训练阶段依托 Transformer 架构与海量语料学习通用表征能力，典型代表包括 GPT-3、LLaMA 与 Qwen 系列模型\citep{vaswani2017attention,brown2020languagemodels,touvron2023llama,bai2023qwen,zhao2023surveylargelanguagemodels}。随着模型规模与数据规模增长，后训练成为决定模型是否能够稳定遵循指令、保持安全约束并在复杂任务上获得高质量推理行为的关键环节\citep{ouyang2022training,dai2023safe,lee2023rlaif,chaudhari2024rlhf,rafailov2023direct}。
+大语言模型的发展通常经历预训练、监督微调与后训练三个阶段。预训练阶段依托 Transformer 架构与海量语料学习通用表征能力，典型代表包括 GPT-3、LLaMA 与 Qwen 系列模型\citep{vaswani2017attention,brown2020languagemodels,touvron2023llama,bai2023qwen,zhao2023surveylargelanguagemodels}。随着模型规模与数据规模增长，后训练成为决定模型是否能够稳定遵循指令、保持安全约束并在复杂任务上获得高质量推理行为的关键环节\citep{ouyang2022training,dai2023safe,lee2023rlaif,chaudhari2024rlhf,rafailov2023direct,ahmadian2024back}。
 
 在人类反馈强化学习之外，近年来也出现了直接偏好优化、AI 反馈强化学习、安全后训练以及对奖励模型质量进行专门评测的工作\citep{rafailov2023direct,dai2023safe,lee2023rlaif,lambert2024rewardbench}。这些工作共同说明：后训练并不是一个单一优化器问题，而是目标函数、奖励来源、采样机制和推理系统共同作用的结果。
 
 \section{数学推理与可验证奖励训练}
 
-数学推理任务之所以成为研究强化学习后训练的重要试验场，在于其奖励信号相对清晰，模型输出通常可以通过最终答案校验、步骤级校验或外部验证器获得近似二值的反馈\citep{cobbe2021training,lightman2023verify,lewkowycz2022solving,ying2024internlmmath}。GSM8K、MATH、Minerva Math、OlympiadBench、Omni-MATH 以及 PutnamBench 等基准构成了从基础文字题到高难竞赛题的多层次评测体系\citep{cobbe2021training,hendrycks2021math,lewkowycz2022solving,he2024olympiadbench,gao2024omnimath,tsoukalas2024putnambench}。
+数学推理任务之所以成为研究强化学习后训练的重要试验场，在于其奖励信号相对清晰，模型输出通常可以通过最终答案校验、步骤级校验或外部验证器获得近似二值的反馈\citep{cobbe2021training,lightman2023verify,lewkowycz2022solving,ying2024internlmmath,shao2024deepseekmath}。GSM8K、MATH、Minerva Math、OlympiadBench、Omni-MATH 以及 PutnamBench 等基准构成了从基础文字题到高难竞赛题的多层次评测体系\citep{cobbe2021training,hendrycks2021math,lewkowycz2022solving,he2024olympiadbench,gao2024omnimath,tsoukalas2024putnambench}。
 
 此外，链式思维、自一致性采样和步骤级验证等方法进一步推动了数学推理研究的发展\citep{wei2022chain,wang2022selfconsistency,lightman2023verify}。这些工作强调，多样化采样对于发掘模型潜在能力具有重要意义；但与此同时，采样预算本身也会显著影响最终训练信号质量。
 
@@ -16,13 +16,13 @@
 
 在可验证奖励场景中，组相对归一化策略优化因其实现简单、训练稳定而受到广泛关注。作为这一路线的更一般优化背景，PPO 等策略梯度方法已经系统讨论了如何在受限更新幅度下稳定提升策略\citep{schulman2017proximal}；DeepSeek-R1 及其后续工作则表明，按 prompt 采样多个回答并利用组内统计量构造优势函数，能够在推理任务上显著提升模型表现\citep{deepseekai2025deepseekr1,zhang2025realsafer1}。然而，这类方法隐含依赖于一个前提：同一 prompt 下采样得到的回答必须具有足够的奖励差异，否则组内标准差退化后将难以形成有效梯度。
 
-围绕这一问题，近期研究从不同角度给出了解释。一类工作指出，强化学习更擅长激发模型已经具备但尚未稳定外显的能力，而非凭空创造新的能力上限\citep{kim2025reinforcement}。另一类工作则通过 pass@$k$ 评估、重采样分析与长链路推理研究说明，多次采样可以显著暴露单次采样难以观察到的潜在正确解\citep{chen2021codex,wang2022selfconsistency,lewkowycz2022solving}。这些结论共同暗示：当固定小组采样无法覆盖 prompt 内部的正负样本差异时，所谓的“无信号”很可能只是小样本统计假象。
+围绕这一问题，近期研究从不同角度给出了解释。一类工作指出，强化学习更擅长激发模型已经具备但尚未稳定外显的能力，而非凭空创造新的能力上限\citep{kim2025reinforcement,yue2025does}。另一类工作则通过 pass@$k$ 评估、重采样分析与长链路推理研究说明，多次采样可以显著暴露单次采样难以观察到的潜在正确解\citep{chen2021codex,wang2022selfconsistency,lewkowycz2022solving}。这些结论共同暗示：当固定小组采样无法覆盖 prompt 内部的正负样本差异时，所谓的“无信号”很可能只是小样本统计假象。
 
 \section{数据过滤、预算分配与自适应采样}
 
-针对组内信号缺失问题，已有研究大致可以分为三类。第一类方法采用被动过滤，即先按照固定预算生成回答，再丢弃全对或全错的 prompt。这类思路实现门槛较低，但已经支付的推理成本无法回收，且难题上稀缺的训练信号会被一并丢弃。第二类方法通过直接放大采样规模来缓解信号退化，其优点是简单有效，但成本通常随组大小线性上升，难以在大规模训练中长期维持\citep{deepseekai2025deepseekr1}。
+针对组内信号缺失问题，已有研究大致可以分为三类。第一类方法采用被动过滤，即先按照固定预算生成回答，再丢弃全对或全错的 prompt。这类思路实现门槛较低，但已经支付的推理成本无法回收，且难题上稀缺的训练信号会被一并丢弃。第二类方法通过直接放大采样规模来缓解信号退化，其优点是简单有效，但成本通常随组大小线性上升，难以在大规模训练中长期维持\citep{deepseekai2025deepseekr1,yu2025dapo}。
 
-第三类方法尝试通过自适应预算分配改善采样效率。Reinforce-Ada 提出了在线多轮采样与早停机制，强调在非线性强化学习目标下按需收集样本的重要性\citep{xiong2025reinforceada}。从更广义的强化学习视角看，主动重要性采样、条件重要性采样和双稳健策略梯度等方法都在讨论如何将有限预算优先投向更有价值的样本区域\citep{papini2024policy,humayoo2018relative,rowland2019conditional,huang2019importance}。本文继承这一基本思路，但关注点更进一步：在 reasoning 训练中，不同难度 prompt 的“单位预算信息回报”高度不均匀，退出规则与批次组织方式都应显式考虑这种难度异质性。
+第三类方法尝试通过自适应预算分配改善采样效率。Reinforce-Ada 提出了在线多轮采样与早停机制，强调在非线性强化学习目标下按需收集样本的重要性\citep{xiong2025reinforceada}。近年的 LLM reasoning 后训练工作则进一步从 selective rollouts、难度对齐和在线数据选择等角度讨论了预算应如何向更有价值的 prompt 倾斜\citep{zheng2025act,kong2025rethinking,sun2025improvingdata,qu2025promptdifficulty}。从更广义的强化学习视角看，主动重要性采样、条件重要性采样和双稳健策略梯度等方法都在讨论如何将有限预算优先投向更有价值的样本区域\citep{papini2024policy,humayoo2018relative,rowland2019conditional,huang2019importance}。本文继承这一基本思路，但关注点更进一步：在 reasoning 训练中，不同难度 prompt 的“单位预算信息回报”高度不均匀，退出规则与批次组织方式都应显式考虑这种难度异质性。
 
 \section{推理系统优化与 KV Cache 视角}
 
