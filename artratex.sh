@@ -108,7 +108,9 @@ fi
 #-
 #-> Open the compiled file
 #-
-$PDFviewer ./$Tmp/"$FileName".pdf || exit
+if [[ -z "${ARTRATEX_NO_OPEN:-}" ]]; then
+    $PDFviewer ./$Tmp/"$FileName".pdf || exit
+fi
 echo "---------------------------------------------------------------------------"
 echo "$TexCompiler $BibCompiler "$FileName".tex finished..."
 echo "---------------------------------------------------------------------------"
