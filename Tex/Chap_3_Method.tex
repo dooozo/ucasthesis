@@ -179,6 +179,13 @@ I(p) = \text{Var}[R] = p(1-p)
 
 其中$R$为该Prompt的Prefill轮次，$N$为总采样数。该指标的含义是：第一轮Prefill是必要的，此后每多一轮Prefill都属于因分批而引入的重复计算；$\frac{R}{N}$越小，缓存命中率越高。
 
+\textbf{从命中率到真实时间的映射。} 仅用$\rho$并不足以刻画真实wall-clock成本，因为不同阶段的单位开销并不相同。为此，本文引入一个简单但实用的成本模型：设单次Prefill开销为$c_\text{pre}(x)$（与Prompt长度相关），单条回答的平均Decode开销为$c_\text{dec}(x)$（与生成长度相关）。则对同一Prompt的总推理成本可近似写为
+\begin{equation}
+C(x) \approx R(x)\,c_\text{pre}(x) + N(x)\,c_\text{dec}(x)
+\label{eq:cost_model}
+\end{equation}
+在固定$n$采样中，$R=1$；在多轮自适应采样中，$R>1$但$N$可显著降低（简单题早停）。因此，最优的采样策略并不追求极致的$\rho$，而是追求在$R$与$N$之间的整体折中：对简单题减少$N$（主要节省Decode），对难题通过后期大批次降低$\frac{R}{N}$（主要摊销Prefill），从而同时压低两项成本。
+
 \textbf{固定采样的情况}。对于固定采样数$n$的方法，所有样本在单轮内一次性生成，$R = 1$，因此：
 \begin{equation}
 \rho_{\text{fixed}} = 1 - \frac{1}{n}
@@ -228,6 +235,43 @@ M_1 = M_0, \quad M_t = M_0 \cdot 2^{t-2} \quad (t \geq 2)
 \end{equation}
 
 设$M_0 = 2$，则各轮批次大小依次为$2, 2, 4, 8, 16$，最大累计样本数为$2 + 2 + 4 + 8 + 16 = 32$，与固定采样数$n = 32$的预算上限一致。该设计对应初始两轮保持相同规模，此后逐轮倍增。
+
+\subsection{前缀共享与KV Cache复用的定量分析}
+\label{subsec:kv_cache_detailed}
+
+现代推理引擎中，推理过程分为Prefill和Decode两个阶段。Prefill负责处理输入Prompt并构建KV Cache，Decode负责逐token生成输出。对于同一Prompt下的多条候选回答，前缀完全相同，理论上只需执行一次Prefill，此后所有候选共享同一前缀缓存。
+
+定义前缀KV Cache命中率为：
+\begin{equation}
+\rho = 1 - \frac{R}{N}
+\label{eq:kv_cache_hitrate_def}
+\end{equation}
+
+其中$R$为执行的Prefill轮次，$N$为总采样数。该指标衡量有多少比例的采样工作利用了缓存，而不是重复计算Prefill。
+
+\textbf{固定采样的情况}。若所有$n$个样本在一轮内同时生成，则$R = 1$，缓存命中率为：
+\begin{equation}
+\rho_{\text{fixed}} = 1 - \frac{1}{n}
+\label{eq:fixed_hitrate}
+\end{equation}
+
+当$n = 32$时，$\rho_{\text{fixed}} = 31/32 \approx 96.9\%$。这是理想情况下的最高缓存利用率。
+
+\textbf{固定小批次追加的情况}。若每轮追加$M$个样本，总轮数为$\lceil N / M \rceil \approx N/M$，则：
+\begin{equation}
+\rho_{\text{fixed-batch}} = 1 - \frac{1}{M}
+\label{eq:fixed_batch_hitrate}
+\end{equation}
+
+缓存命中率仅取决于单轮批次大小$M$，与总采样数$N$无关。若$M = 4$（如常见的固定小批次自适应），则$\rho_{\text{fixed-batch}} = 75\%$，明显低于固定采样。
+
+\textbf{几何倍增策略的情况}。EBS策略中，简单题可能在第1-2轮退出，困难题在第4-5轮退出。设某类题目平均在第$k$轮退出，累计采样数为$N_k$，则平均缓存命中率约为：
+\begin{equation}
+\rho_{\text{EBS}} \approx 1 - \frac{\mathbb{E}[k]}{\mathbb{E}[N_k]}
+\label{eq:ebs_avg_hitrate}
+\end{equation}
+
+由于困难题的批次数较多，后期大批次能够有效摊销Prefill成本。EBS策略的关键并不在于对所有Prompt追求“固定大$n$”的极高命中率，而是在保证困难题可继续深采样的同时，让大量简单题尽早退出以减少无效Decode，从而在wall-clock成本上取得更优折中。
 
 \textbf{设计的三重优势}：
 
@@ -354,6 +398,8 @@ T_t = T_0 \cdot \left(1 + \alpha \cdot \log_2\left(\frac{N_t}{M_0}\right)\right)
 
 其中$\rho_{\max}$为预设的截断阈值（如$\rho_{\max} = 5.0$）。截断操作引入了一定的偏差，但显著降低了梯度方差，在实践中通常能取得更稳定的训练效果。这是在bias-variance权衡上倾向于减少方差的一个选择。
 
+\textbf{备注：SNIS与截断的统计含义。} 本文同时使用了自归一化重要性采样（SNIS）基准线（式\ref{eq:is_baseline}）与截断权重（式\ref{eq:importance_weight_clipping}）。两者都可能引入轻微偏差，但其主要目的在于控制梯度估计方差、避免少量极端样本主导更新。在大语言模型RL后训练中，稳定性往往是可复现提升的前提，因此该取舍是合理且常见的工程选择。
+
 \subsection{优势函数的无偏估计}
 \label{subsec:advantage_function_unbiased}
 
@@ -429,7 +475,7 @@ L(\theta) = - \sum_i \rho_i^{\text{clipped}} \cdot A_{\text{IS}}(x, a_i) \cdot \
     \caption{层级几何自适应采样框架（H-GAS）}
     \label{alg:h_gas}
     \begin{algorithmic}[1]
-        \Require Prompt集合$X$；当前策略$\pi_\theta$；基准温度$T_0$；温度缩放因子$\alpha$；初始批次大小$M_0$；最大轮次$R_{\max}$；重要性权重截断阈值$\rho_{\max}$
+        \Require Prompt集合$X$；当前策略$\pi_\theta$；基准温度$T_0$；温度缩放因子$\alpha$；初始批次大小$M_0$；最大轮次$R_{\max}$；最大累计采样数$N_{\max}$（例如$N_{\max}=M_0\,(2^{R_{\max}}-1)$）；重要性权重截断阈值$\rho_{\max}$
         \Ensure 更新后的策略参数$\theta$
         
         \For{每个训练步骤}
@@ -475,6 +521,17 @@ L(\theta) = - \sum_i \rho_i^{\text{clipped}} \cdot A_{\text{IS}}(x, a_i) \cdot \
 \end{enumerate}
 
 \textbf{最坏情况分析}。本框架在最坏情况下（所有Prompt均为难题，采样至预算上限）的总采样数与固定$n$方案一致。在典型的训练场景中，由于大量简单题在第1-2轮即退出，平均每个Prompt的实际采样数显著低于预算上限，从而实现实际计算成本的下降。
+
+\subsection{时间与空间复杂度讨论}
+\label{subsec:complexity_discussion}
+
+从计算复杂度角度，H-GAS对单个Prompt的最坏情况样本数为$N_{\max}$，因此其采样复杂度与固定预算方法同阶（$\mathcal{O}(N_{\max})$）。差异主要体现在\textbf{期望意义}与\textbf{系统常数项}：
+\begin{itemize}
+    \item \textbf{期望采样数}：由于早停机制，大量简单题仅消耗$\mathcal{O}(M_0)$样本即可退出，使总体$\mathbb{E}[N]$显著小于$N_{\max}$。
+    \item \textbf{Prefill摊销}：几何倍增使困难题在后期轮次以更大批次执行Decode，从而在式\eqref{eq:kv_cache_hit_rate}所刻画的$\frac{R}{N}$项上获得更好的摊销效果并提升缓存复用效率。
+    \item \textbf{方差控制}：TSIS中的截断权重与SNIS基准线主要影响梯度方差常数项，避免训练过程中出现少量极端样本导致的不稳定更新。
+\end{itemize}
+从实现角度，框架需要额外记录每条样本的采样温度（或轮次索引）以及对应的对数概率，用于计算重要性权重；这部分存储随采样数线性增长，为$\mathcal{O}(N_{\max})$，与RLFT中本就需要缓存log-prob与奖励的开销同阶。
 
 \section{本章小结}
 \label{sec:method_summary}
