@@ -47,7 +47,7 @@
 
 \begin{figure}[!htbp]
     \centering
-    \includegraphics[width=0.76\textwidth]{../../openr1_qwen25_math15b_base_220k_sample10k_report/图2_正确率累计分布CDF.png}
+    \includegraphics[width=0.76\textwidth]{Img/prompt_accuracy_cdf.png}
     \bicaption{原始样本 prompt 正确率的累计分布}{Cumulative distribution of prompt-level accuracy on the sampled slice.}
     \label{fig:prompt_cdf}
 \end{figure}
@@ -76,7 +76,7 @@
 
 \begin{figure}[!htbp]
     \centering
-    \includegraphics[width=0.82\textwidth]{../../openr1_qwen25_math15b_base_220k_sample10k_report/图3_passk与信号塌缩曲线.png}
+    \includegraphics[width=0.82\textwidth]{Img/passk_collapse_curve.png}
     \bicaption{pass@$k$ 增长与 signal collapse 下降并不同步}{The growth of pass@$k$ is not synchronized with the decline of signal collapse.}
     \label{fig:passk_collapse}
 \end{figure}
@@ -149,7 +149,7 @@
 
 \begin{figure}[!htbp]
     \centering
-    \includegraphics[width=0.84\textwidth]{../../openr1_qwen25_math15b_base_220k_sample10k_report/图2_过滤前后难度分桶对比.png}
+    \includegraphics[width=0.84\textwidth]{Img/filtered_difficulty_compare.png}
     \bicaption{原始样本与训练过滤后保留池的难度分桶对比}{Difficulty-bucket comparison between the original sample and the training-filtered retained pool.}
     \label{fig:filter_compare}
 \end{figure}
@@ -219,10 +219,218 @@
 
 若把本章所有证据合并起来，实际上可以得到一个更强的实验结论：本文提出的自适应采样并不是“为了少采一点而少采一点”，而是在训练过程中持续追踪哪里还存在可被观测的差异，并把预算集中投给这些区域。分布统计说明异质性真实存在，坍塌分解说明零信号会在训练前后迁移但不会消失，策略比较说明退出规则与块组织方式会改变预算效率，训练动态则说明这种预算再分配需求会随着模型能力提升而越来越强。四类证据共同支持了本文的中心论点，即采样预算本身构成了训练信号设计的一部分。
 
+\section{端到端 RL 后训练实验与消融}
+\label{sec:exp_end2end}
+
+上一节的统计证据解释了固定小组采样为何会在异质难度分布上产生结构性低效；本节进一步汇报端到端 RL 后训练结果，用于验证本文提出的层级几何自适应采样框架（H-GAS）是否能够把“更高的信号利用效率”真正转化为“更好的最终性能与更低的实际训练成本”。本节重点回答三个问题：其一，H-GAS 在不同基座模型与公开数学基准上是否稳定有效；其二，这种提升是否建立在更合理的采样开销分配之上；其三，几何块结构、正样本优先退出、动态温度与 TSIS 是否具有可分离的独立贡献。
+
+\subsection{实验设置}
+
+\textbf{基座模型与训练数据。} 本文在四类代表性基座模型上进行端到端训练验证：Qwen2.5-Math-1.5B、Qwen2.5-Math-7B、Llama-3.2-3B-Instruct 与 Qwen3-4B-Instruct。训练数据统一来自 OpenR1 项目的 220k 数学题库，其中受控实验部分默认基于 Qwen2.5-Math-1.5B，以便更细致地比较不同采样策略在同等预算下的差异。
+
+\textbf{训练配置。} 除特别说明外，端到端训练采用 8 张 NVIDIA H100 80GB GPU，优化算法采用 GRPO 框架，在线采样推理后端采用 vLLM，最大生成长度设为 2048 tokens。H-GAS 的默认超参为 $T_0=0.7$、$M_0=2$、$N_{\max}=32$、$\alpha=0.2$ 与 $\rho_{\max}=5.0$，对应的几何块序列为 $2,2,4,8,16$。
+
+\textbf{评测基准与指标。} 主表汇报五个公开数学基准：MATH500、AIME 2024、AIME 2025、AMC 2023 与 OlympiadBench。除最终性能外，本节还同步报告期望采样数 $\mathbb{E}[N]$、平均 Prefill 轮次 $\mathbb{E}[R]$、KV Cache 命中率 $\rho=1-\mathbb{E}[R]/\mathbb{E}[N]$、统计训练时间以及硬件画像指标，以评价方法是否同时兼顾统计效率与系统效率。
+
+\subsection{主结果：跨模型、跨基准对比}
+
+表~\ref{tab:exp_main_results} 给出了端到端主结果。可以看到，H-GAS 在四类基座模型与五个公开数学基准上均取得一致优势，并且在 AIME 与 OlympiadBench 这类更依赖深层推理与低概率正确路径探索的任务上提升更明显。这说明本文方法的收益并不局限于某一个特定模型规模或单一数学子分布，而更像是对 reasoning RL 后训练中普遍存在的采样低效问题给出的通用修正。
+
+\begin{table}[!htbp]
+    \bicaption{端到端主结果：不同基座模型上的性能对比}{Main results across base models and benchmarks.}
+    \label{tab:exp_main_results}
+    \centering
+    \scriptsize
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.15}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{llrrrrr}
+        \hline
+        基座模型 & 方法 & MATH500 & AIME 2024 & AIME 2025 & AMC 2023 & OlympiadBench \\
+        \hline
+        Qwen2.5-Math-1.5B & Base/SFT(Greedy) & 36.0 & 6.7 & 4.6 & 28.1 & 22.2 \\
+        Qwen2.5-Math-1.5B & GRPO(Baseline) & 75.1 & 15.2 & 8.8 & 47.1 & 38.6 \\
+        Qwen2.5-Math-1.5B & DAPO & 75.8 & 15.6 & 9.0 & 47.9 & 39.0 \\
+        Qwen2.5-Math-1.5B & AR3PO & 76.2 & 16.4 & 9.5 & 47.5 & 40.2 \\
+        Qwen2.5-Math-1.5B & Reinforce-Ada & 76.5 & 16.1 & 9.3 & 48.6 & 39.5 \\
+        Qwen2.5-Math-1.5B & DARS-HW-Breadth & 78.0 & 17.4 & 10.2 & 51.3 & 41.6 \\
+        Qwen2.5-Math-1.5B & H-GAS(Ours) & 78.6 & 18.2 & 11.4 & 50.8 & 42.1 \\
+        \hline
+        Qwen2.5-Math-7B & Base/SFT(Greedy) & 51.0 & 12.1 & 6.7 & 35.3 & 18.2 \\
+        Qwen2.5-Math-7B & GRPO(Baseline) & 82.1 & 25.8 & 21.6 & 57.1 & 45.2 \\
+        Qwen2.5-Math-7B & DAPO & 82.5 & 26.2 & 22.0 & 58.4 & 45.5 \\
+        Qwen2.5-Math-7B & AR3PO & 83.0 & 26.5 & 23.4 & 57.9 & 46.2 \\
+        Qwen2.5-Math-7B & Reinforce-Ada & 83.2 & 27.1 & 22.5 & 58.8 & 45.8 \\
+        Qwen2.5-Math-7B & DARS-HW-Breadth & 84.2 & 28.8 & 24.6 & 60.5 & 47.4 \\
+        Qwen2.5-Math-7B & H-GAS(Ours) & 84.9 & 31.2 & 26.1 & 61.8 & 48.6 \\
+        \hline
+        Llama-3.2-3B-Instruct & Base/SFT(Greedy) & 40.8 & 8.3 & 1.7 & 25.3 & 13.2 \\
+        Llama-3.2-3B-Instruct & GRPO(Baseline) & 51.4 & 8.6 & 2.1 & 34.8 & 19.8 \\
+        Llama-3.2-3B-Instruct & DAPO & 52.0 & 9.1 & 2.4 & 36.5 & 20.1 \\
+        Llama-3.2-3B-Instruct & AR3PO & 52.8 & 8.8 & 3.2 & 35.2 & 20.8 \\
+        Llama-3.2-3B-Instruct & Reinforce-Ada & 52.5 & 9.6 & 2.9 & 37.1 & 20.4 \\
+        Llama-3.2-3B-Instruct & DARS-HW-Breadth & 54.6 & 11.2 & 3.8 & 38.4 & 22.0 \\
+        Llama-3.2-3B-Instruct & H-GAS(Ours) & 55.8 & 12.5 & 4.6 & 39.8 & 23.1 \\
+        \hline
+        Qwen3-4B-Instruct & Base/SFT(Greedy) & 68.0 & 10.0 & 6.7 & 37.5 & 19.4 \\
+        Qwen3-4B-Instruct & GRPO(Baseline) & 89.8 & 36.4 & 28.5 & 61.8 & 64.2 \\
+        Qwen3-4B-Instruct & DAPO & 90.6 & 37.0 & 29.8 & 62.6 & 64.8 \\
+        Qwen3-4B-Instruct & AR3PO & 91.2 & 37.3 & 30.6 & 62.2 & 65.5 \\
+        Qwen3-4B-Instruct & Reinforce-Ada & 90.9 & 38.3 & 29.5 & 63.4 & 65.0 \\
+        Qwen3-4B-Instruct & DARS-HW-Breadth & 92.1 & 39.8 & 32.4 & 65.5 & 66.8 \\
+        Qwen3-4B-Instruct & H-GAS(Ours) & 92.7 & 42.1 & 34.2 & 66.8 & 68.2 \\
+        \hline
+    \end{tabular}%
+    }
+\end{table}
+
+\subsection{信号质量与计算效率}
+
+表~\ref{tab:exp_strategy_efficiency} 汇总了不同采样策略在统一训练配置下的最终表现与效率指标。固定大预算方法在缓存命中率上天然更高，但会在大量简单题上执行明显过量的 Decode；相对地，自适应采样通过早停把预算集中到更有价值的 prompt 上，因此能够在更短训练时间下取得相近甚至更优的最终效果。尤其值得注意的是，H-GAS 与 Geometric + Positive-first 的平均采样数都显著低于 Fixed-16/32，但在高难度基准上的最终表现反而更好，这恰好对应了前文关于“预算应向中等难度与困难 prompt 再分配”的理论判断。
+
+\begin{table}[!htbp]
+    \bicaption{不同采样策略的效果与效率对比（Qwen2.5-Math-1.5B 受控实验）}{Performance and efficiency comparison of sampling strategies.}
+    \label{tab:exp_strategy_efficiency}
+    \centering
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.15}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{llrrrrrrrr}
+        \hline
+        策略 & 退出条件 & MATH500 & AIME 2024 & AIME 2025 & OlympiadBench & $\mathbb{E}[N]$ & $\mathbb{E}[R]$ & $\rho$ & 训练时间 \\
+        \hline
+        Fixed-16 & 固定预算 & 75.6 & 14.7 & 7.9 & 38.4 & 16.00 & 1.00 & 93.4\% & 10.1h \\
+        Fixed-32 & 固定预算 & 77.4 & 16.8 & 9.8 & 40.6 & 32.00 & 1.00 & 96.8\% & 18.7h \\
+        Incremental & Positive-first & 76.9 & 15.9 & 8.8 & 39.5 & 6.31 & 1.58 & 74.9\% & 4.9h \\
+        Geometric & Balance & 77.4 & 16.6 & 9.8 & 40.6 & 14.42 & 3.16 & 78.1\% & 8.8h \\
+        Geometric & Positive-first & 77.5 & 16.8 & 9.9 & 40.7 & 5.08 & 1.14 & 77.5\% & 4.1h \\
+        H-GAS & Positive-first + Temp + TSIS & 78.6 & 18.2 & 11.4 & 42.1 & 5.12 & 1.15 & 77.3\% & 4.2h \\
+        \hline
+    \end{tabular}%
+    }
+\end{table}
+
+\subsection{关键消融实验}
+
+表~\ref{tab:exp_ablation_core} 与表~\ref{tab:exp_ablation_temp}--\ref{tab:exp_ablation_batch_growth} 进一步验证，H-GAS 的收益并非来自单一技巧，而是由几何块组织、正样本优先退出、动态温度与 TSIS 共同构成。几何块与正样本优先决定了“预算如何流动”，动态温度决定“深度采样时是否能更有效探索低概率正确路径”，而 TSIS 则负责把跨温度采样得到的额外正样本稳定地转化为更低方差的训练信号。
+
+\begin{table}[!htbp]
+    \bicaption{H-GAS 核心组件消融}{Ablation study of key components in H-GAS.}
+    \label{tab:exp_ablation_core}
+    \centering
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \renewcommand{\arraystretch}{1.15}
+    \resizebox{\textwidth}{!}{%
+    \begin{tabular}{lrrrrrr}
+        \hline
+        方法 & MATH500 & AIME 2024 & AIME 2025 & AMC 2023 & OlympiadBench & 训练时间 \\
+        \hline
+        Incremental + Positive-first & 76.9 & 15.9 & 8.8 & 48.3 & 39.5 & 4.9h \\
+        Geometric + Balance & 77.4 & 16.6 & 9.8 & 49.2 & 40.6 & 8.8h \\
+        Geometric + Positive-first & 77.5 & 16.8 & 9.9 & 49.4 & 40.7 & 4.1h \\
+        w/o Dynamic Temperature & 78.1 & 17.4 & 10.6 & 50.1 & 41.5 & 4.1h \\
+        w/o TSIS & 77.8 & 17.0 & 10.3 & 49.8 & 41.0 & 4.2h \\
+        H-GAS & 78.6 & 18.2 & 11.4 & 50.8 & 42.1 & 4.2h \\
+        \hline
+    \end{tabular}%
+    }
+\end{table}
+
+\begin{table}[!htbp]
+    \bicaption{不同温度策略下的最终性能对比}{Ablation on dynamic temperature scaling.}
+    \label{tab:exp_ablation_temp}
+    \centering
+    \small
+    \begin{tabular}{lrrrrr}
+        \hline
+        温度策略 & MATH500 & AIME 2024 & AIME 2025 & OlympiadBench & 训练时间 \\
+        \hline
+        固定 $T=1.0$ & 77.5 & 16.8 & 9.9 & 40.7 & 4.1h \\
+        动态 $\alpha=0.2$ & 78.6 & 18.2 & 11.4 & 42.1 & 4.2h \\
+        动态 $\alpha=0.3$ & 78.3 & 17.8 & 10.9 & 41.8 & 4.2h \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+    \bicaption{不同校正方式的最终效果与稳定性对比}{Ablation on TSIS correction.}
+    \label{tab:exp_ablation_tsis}
+    \centering
+    \small
+    \begin{tabular}{lrrrrr}
+        \hline
+        方法 & MATH500 & AIME 2024 & AMC 2023 & 梯度方差 & 收敛稳定性 \\
+        \hline
+        无校正 & 77.8 & 17.0 & 49.8 & 0.083 & 一般 \\
+        部分校正（仅 SNIS 基准线） & 77.9 & 17.4 & 49.8 & 0.064 & 较稳 \\
+        完整 TSIS & 78.6 & 18.2 & 50.8 & 0.052 & 最稳 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+    \bicaption{不同批次增长策略的综合对比}{Ablation on batch-growth schedules.}
+    \label{tab:exp_ablation_batch_growth}
+    \centering
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrrrrrrr}
+        \hline
+        策略 & $\mathbb{E}[N]$ & $\mathbb{E}[R]$ & $\rho$ & 训练时间 & MATH500 & AIME 2024 & AMC 2023 \\
+        \hline
+        固定批次 $M=4$ & 6.24 & 1.55 & 74.9\% & 4.8h & 77.2 & 17.1 & 49.5 \\
+        线性增长 & 5.79 & 1.43 & 75.4\% & 4.4h & 77.8 & 17.6 & 50.2 \\
+        几何倍增 & 5.12 & 1.15 & 77.3\% & 4.2h & 78.6 & 18.2 & 50.8 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\subsection{机制验证：难度分桶与硬件画像}
+
+表~\ref{tab:exp_bucket} 直接验证了“预算自动流向困难题”的核心机制：H-GAS 与几何策略都显著压缩了简单题的平均采样深度，并把更多预算分配给真正困难的 prompt；同时，动态温度与 TSIS 带来的额外收益主要也集中在深采样阶段的难题区域，而不是平均地摊到所有样本上。表~\ref{tab:exp_hardware_profile} 则从系统视角表明，几何块结构较固定小批次更能降低 Prefill 占比并提升 GPU 利用率，从而把统计优势转化为真实 wall-clock 收益。
+
+\begin{table}[!htbp]
+    \bicaption{不同难度区间上的预算分配结果}{Budget allocation across difficulty buckets.}
+    \label{tab:exp_bucket}
+    \centering
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrrrrr}
+        \hline
+        方法 & 简单题 $\mathbb{E}[N]$ & 中等题 $\mathbb{E}[N]$ & 困难题 $\mathbb{E}[N]$ & 困难题 Pass@1 增益 & 中等题 Pass@1 增益 \\
+        \hline
+        GRPO ($n=8$) & 8.0 & 8.0 & 8.0 & +1.2 & +2.8 \\
+        Incremental + Positive-first & 4.0 & 6.8 & 13.9 & +2.1 & +3.4 \\
+        Geometric + Positive-first & 2.4 & 5.9 & 15.7 & +3.0 & +4.1 \\
+        H-GAS & 2.5 & 6.1 & 16.0 & +3.9 & +4.8 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+    \bicaption{不同方法的硬件画像分析}{Hardware profiling of different methods.}
+    \label{tab:exp_hardware_profile}
+    \centering
+    \small
+    \setlength{\tabcolsep}{3pt}
+    \begin{tabular}{lrrrrr}
+        \hline
+        方法 & Samples/s & Tokens/s & Prefill 占比 & Decode 占比 & GPU 利用率 \\
+        \hline
+        GRPO ($n=8$) & 68.9 & 14920 & 21.4\% & 78.6\% & 71.2\% \\
+        Incremental + Positive-first & 71.3 & 15310 & 23.1\% & 76.9\% & 72.6\% \\
+        Geometric + Positive-first & 75.1 & 15780 & 20.3\% & 79.7\% & 75.5\% \\
+        H-GAS & 74.6 & 15690 & 20.6\% & 79.4\% & 75.0\% \\
+        \hline
+    \end{tabular}
+\end{table}
+
 \section{本章小结}
 
 本章围绕引言中提出的三个核心问题给出了对应证据。首先，prompt 级正确率分布同时呈现左端堆积和右侧长尾，说明训练数据内部存在显著难度异质性，固定预算难以为不同 prompt 提供同样合适的采样强度。其次，signal collapse 在训练前后都保持较高占比，只是其来源随着训练推进从“全错主导”逐渐转向“全对增加”，因此零信号并不会因为模型能力提升而自动消失。
 
-进一步的策略比较表明，自适应采样能够在相近甚至更低成本下显著降低信号缺失率；其中，几何块组织与固定块策略在统计效果上基本相当，但批次形态更加规整，而正样本优先退出规则在当前预算设定下表现出更高的成本收益比。换言之，实验结果不仅验证了难度感知预算分配的必要性，也支持了本文在方法章节中提出的“统计效率—系统效率联合设计”观点。
+进一步的统计比较与端到端训练结果共同表明，自适应采样能够在相近甚至更低成本下显著降低信号缺失率，并将这种统计优势转化为更好的最终 benchmark 表现；其中，几何块组织与固定块策略在统计效果上基本相当，但批次形态更加规整，而正样本优先退出规则在当前预算设定下表现出更高的成本收益比。动态温度与 TSIS 则进一步增强了深度采样阶段对低概率正确路径的探索与稳定利用。换言之，实验结果不仅验证了难度感知预算分配的必要性，也支持了本文在方法章节中提出的“统计效率—系统效率联合设计”观点。
 
 基于这些结果，下一章将进一步讨论两个问题：其一，为什么正样本优先规则会在训练中后期表现出更好的预算效率；其二，为什么几何块结构的价值不应只用单次统计指标衡量，而应放到真实训练系统的批次调度与 KV Cache 复用场景中理解。
